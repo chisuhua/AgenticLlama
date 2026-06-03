@@ -160,3 +160,20 @@ a.out.*
 
 AGENTS.local.md
 .pi/SYSTEM.md
+# Added by code-review-graph
+.code-review-graph/
+
+# Local AI tooling configuration (not for commit)
+/.claude/
+/.cursorrules
+/.gemini/hooks/
+/.gemini/skills/
+/.gemini/*.bak
+/.kiro/
+/.qoder/
+/.mcp.json
+/.opencode.json
+/.windsurfrules
+/GEMINI.md
+/QODER.md
+/.github/code-review-graph.instruction.md
