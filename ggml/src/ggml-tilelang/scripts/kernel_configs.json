@@ -1,0 +1,32 @@
+{
+  "kernels": [
+    {
+      "name": "tilelang_add_fp16",
+      "op": "add",
+      "dtype": "float16",
+      "block_size": 1024,
+      "out_file": "add_fp16.cu"
+    },
+    {
+      "name": "tilelang_add_fp32",
+      "op": "add",
+      "dtype": "float32",
+      "block_size": 1024,
+      "out_file": "add_fp32.cu"
+    },
+    {
+      "name": "tilelang_mul_fp16",
+      "op": "mul",
+      "dtype": "float16",
+      "block_size": 1024,
+      "out_file": "mul_fp16.cu"
+    },
+    {
+      "name": "tilelang_mul_fp32",
+      "op": "mul",
+      "dtype": "float32",
+      "block_size": 1024,
+      "out_file": "mul_fp32.cu"
+    }
+  ]
+}
