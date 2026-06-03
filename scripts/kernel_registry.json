@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "default_block_size": 1024,
+  "default_num_warps": 4,
+  "kernels": [
+    {
+      "name": "gelu",
+      "module": "triton_kernels.elementwise",
+      "function": "gelu_kernel",
+      "variants": [
+        {
+          "dtype": "fp16",
+          "arch":  "sm80",
+          "specialise": { "BLOCK_SIZE": 1024 },
+          "signature": "*fp16,*fp16,i32,1024"
+        },
+        {
+          "dtype": "fp32",
+          "arch":  "sm80",
+          "specialise": { "BLOCK_SIZE": 1024 },
+          "signature": "*fp32,*fp32,i32,1024"
+        }
+      ]
+    },
+    {
+      "name": "silu",
+      "module": "triton_kernels.elementwise",
+      "function": "silu_kernel",
+      "variants": [
+        {
+          "dtype": "fp16",
+          "arch":  "sm80",
+          "specialise": { "BLOCK_SIZE": 1024 },
+          "signature": "*fp16,*fp16,i32,1024"
+        },
+        {
+          "dtype": "fp32",
+          "arch":  "sm80",
+          "specialise": { "BLOCK_SIZE": 1024 },
+          "signature": "*fp32,*fp32,i32,1024"
+        }
+      ]
+    }
+  ]
+}
