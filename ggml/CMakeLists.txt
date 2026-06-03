@@ -258,6 +258,10 @@ set   (GGML_SYCL_DEVICE_ARCH "" CACHE STRING
 
 option(GGML_OPENVINO                        "ggml: use OPENVINO"                              OFF)
 
+option(GGML_CUTLASS                         "ggml: enable CUTLASS backend"                    OFF)
+option(GGML_TILELANG                        "ggml: enable TileLang AOT backend"               OFF)
+option(GGML_TRITON                          "ggml: enable Triton AOT backend"                 OFF)
+
 option(GGML_OPENCL                          "ggml: use OpenCL"                                OFF)
 option(GGML_OPENCL_PROFILING                "ggml: use OpenCL profiling (increases overhead)" OFF)
 option(GGML_OPENCL_EMBED_KERNELS            "ggml: embed kernels"                             ON)
@@ -338,6 +342,9 @@ set(GGML_PUBLIC_HEADERS
     include/ggml-webgpu.h
     include/ggml-zendnn.h
     include/ggml-openvino.h
+    include/ggml-cutlass.h
+    include/ggml-tilelang.h
+    include/ggml-triton.h
     include/gguf.h)
 
 set_target_properties(ggml PROPERTIES PUBLIC_HEADER "${GGML_PUBLIC_HEADERS}")
