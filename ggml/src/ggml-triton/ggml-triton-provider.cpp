@@ -4,6 +4,10 @@
 #include "ggml-triton-provider-cutlass.h"
 #endif
 
+#ifdef GGML_TRITON_HAS_TILELANG
+#include "ggml-triton-provider-tilelang.h"
+#endif
+
 #include <mutex>
 
 // ----------------------------------------------------------------------------
@@ -59,6 +63,10 @@ ggml_triton_op_registry & ggml_triton_global_registry() {
         ggml_triton_register_builtin_providers(registry);
 #ifdef GGML_TRITON_HAS_CUTLASS
         ggml_triton_register_cutlass_providers(registry);
+#endif
+
+#ifdef GGML_TRITON_HAS_TILELANG
+        ggml_triton_register_tilelang_providers(registry);
 #endif
     });
     return registry;

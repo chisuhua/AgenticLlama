@@ -342,8 +342,6 @@ set(GGML_PUBLIC_HEADERS
     include/ggml-webgpu.h
     include/ggml-zendnn.h
     include/ggml-openvino.h
-    include/ggml-cutlass.h
-    include/ggml-tilelang.h
     include/ggml-triton.h
     include/gguf.h)
 

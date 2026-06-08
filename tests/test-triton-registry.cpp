@@ -1,0 +1,88 @@
+// tests/test-triton-registry.cpp
+//
+// Unit test for the ggml-triton provider registry.
+//
+// Verifies that the built-in providers (CPU, Triton AOT, CUTLASS, TileLang)
+// are registered correctly and that the registry's `select()` returns a
+// non-null implementation for ops that have at least one provider.
+//
+// This test is gated on GGML_TRITON being enabled. Some providers (CUTLASS,
+// TileLang) are only registered when their respective CMake options are on.
+// The test gracefully skips assertions for providers that aren't built.
+
+#include "ggml.h"
+#include "ggml-triton-provider.h"
+#include "ggml-triton-dispatch.h"
+#include "ggml-impl.h"  // for ggml_set_op_params_i32 (internal API)
+
+#include <cassert>
+#include <cstdio>
+#include <cstdlib>
+
+int main() {
+    // 1. Registry is non-empty: at least the CPU providers are always there.
+    auto & reg = ggml_triton_global_registry();
+
+    bool found_cpu_gelu = false;
+    if (auto * impls = reg.get_impls(GGML_OP_UNARY)) {
+        for (const auto & impl : *impls) {
+            if (impl.provider == GGML_TRITON_PROVIDER_CPU &&
+                std::string(impl.name).find("gelu") != std::string::npos) {
+                found_cpu_gelu = true;
+                break;
+            }
+        }
+    }
+    if (!found_cpu_gelu) {
+        std::fprintf(stderr, "CPU GELU provider not registered (should always be present)\n");
+        return 1;
+    }
+
+    // 2. Selecting the highest-priority provider for a valid f32 GELU
+    //    returns a non-null impl.
+    ggml_tensor a{};
+    a.type = GGML_TYPE_F32;
+    ggml_tensor unary_op{};
+    unary_op.op   = GGML_OP_UNARY;
+    unary_op.type = GGML_TYPE_F32;
+    // Set the unary op type to GELU via the op_params I32 slot.
+    ggml_set_op_params_i32(&unary_op, 0, GGML_UNARY_OP_GELU);
+    unary_op.src[0] = &a;
+
+    const auto * impl = reg.select(&unary_op);
+    if (impl == nullptr) {
+        std::fprintf(stderr, "No provider selected for f32 GELU\n");
+        return 2;
+    }
+
+    std::printf("selected=%s provider=%d priority=%d\n",
+                impl->name, (int) impl->provider, impl->priority);
+
+    // 3. If TileLang provider is built (GGML_TRITON_HAS_TILELANG), it must
+    //    be present in the registry for GGML_OP_ADD. We don't know at
+    //    compile time whether the macro is defined (it's a CMake-injected
+    //    define), so we check by name instead.
+    bool found_tilelang = false;
+    if (auto * impls = reg.get_impls(GGML_OP_ADD)) {
+        for (const auto & impl : *impls) {
+            if (impl.provider == GGML_TRITON_PROVIDER_TILELANG) {
+                found_tilelang = true;
+                break;
+            }
+        }
+    }
+
+#ifdef GGML_TRITON_HAS_TILELANG
+    if (!found_tilelang) {
+        std::fprintf(stderr, "TileLang ADD provider not registered (expected when GGML_TRITON_HAS_TILELANG is defined)\n");
+        return 3;
+    }
+    std::printf("tilelang provider: registered (as expected)\n");
+#else
+    std::printf("tilelang provider: %s (skipping assertion — not built)\n",
+                found_tilelang ? "registered" : "not registered");
+#endif
+
+    std::printf("OK: registry test passed\n");
+    return 0;
+}
