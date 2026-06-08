@@ -5,6 +5,14 @@ option(GGML_TRITON_CPU_ONLY     "Build Triton backend with CPU-only providers (n
 if (GGML_TRITON)
     if (NOT GGML_TRITON_CPU_ONLY)
         find_package(CUDAToolkit REQUIRED)
+        enable_language(CUDA)
+        # Set default CUDA arch list for the .cu files in the CUTLASS / TileLang
+        # provider blocks. Users can override with
+        # -DCMAKE_CUDA_ARCHITECTURES=... when configuring. Mirrors the
+        # pattern in ggml/src/ggml-cuda/CMakeLists.txt.
+        if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+            set(CMAKE_CUDA_ARCHITECTURES "75;80;86;89;90")
+        endif()
     else()
         message(STATUS "ggml-triton: CPU-only mode enabled (no CUDA required)")
     endif()
@@ -80,8 +88,6 @@ if (GGML_TRITON)
     endif()
 
     if(GGML_TRITON_WITH_CUTLASS)
-        enable_language(CUDA)
-
         set(GGML_CUTLASS_KERNELS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/kernels/cutlass)
         # CUTLASS_DIR removed — CUTLASS headers come from the kernels/cutlass/include/ dir
         # (the old `third_party/cutlass` subdir is not copied over; if CUTLASS headers are

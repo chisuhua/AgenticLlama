@@ -315,4 +315,9 @@ endif()
 if (GGML_TRITON)
     llama_build_and_test(test-triton-registry.cpp)
     target_link_libraries(test-triton-registry PRIVATE ggml-triton)
+    # Provider headers and internal ggml-impl.h live next to the source files —
+    # make them reachable for the test.
+    target_include_directories(test-triton-registry PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-triton
+        ${PROJECT_SOURCE_DIR}/ggml/src)
 endif()
