@@ -22,6 +22,9 @@
 
 如果只读一份文档就读这个表——剩下的都是展开。
 
+> **下一步要做什么？** 完整答案见 [`ROADMAP.md`](ROADMAP.md)——4 阶段 (A/B/C/D)、
+> 依赖图、工作量估算、风险条款。
+
 ## 阅读顺序（按目标推进路径）
 
 ```
@@ -184,6 +187,7 @@ minimind-3/                             # 端到端测试用的参考模型（�
 - [`ggml-custom-backends.md`](ggml-custom-backends.md) — Triton/TileLang/CUTLASS 架构
 - [`minimind-integration.md`](minimind-integration.md) — 端到端 recipe
 - [`test-pyramid.md`](test-pyramid.md) — 5 级测试
+- [`ROADMAP.md`](ROADMAP.md) — 实施路线图 (4 阶段、依赖图、工作量、风险)
 
 次近（fork 周边）：
 - [`../backend/TRITON.md`](../backend/TRITON.md) — 用户视角
