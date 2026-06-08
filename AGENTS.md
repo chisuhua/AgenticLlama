@@ -9,6 +9,30 @@ AI assistance is permissible only when the majority of the code is authored by a
 
 ---
 
+## Project Goal
+
+**This is a llama.cpp fork. Its single goal is:**
+
+> **End-to-end run the [MiniMind-3](docs/development/minimind-integration.md) model on the llama.cpp inference engine, with the self-developed unified [Triton multi-kernel backend](docs/development/ggml-custom-backends.md) (CUTLASS + TileLang + Triton-AOT) accelerating GPU inference.**
+
+Every architectural decision, document, and PR in this fork is anchored to that goal. "Generic pluggable backend framework", "upstream-aligned refactor", or other motivations are secondary.
+
+The full goal statement, status table, and entry-point to all task-specific documentation lives in:
+
+> **[`docs/development/README.md`](docs/development/README.md)** ← start here
+
+That README is the map. It links to:
+
+- [`docs/development/ggml-custom-backends.md`](docs/development/ggml-custom-backends.md) — Triton / TileLang / CUTLASS architecture
+- [`docs/development/minimind-integration.md`](docs/development/minimind-integration.md) — end-to-end MiniMind-3 recipe (HF → GGUF → llama-cli)
+- [`docs/development/test-pyramid.md`](docs/development/test-pyramid.md) — 5-level test plan for engine development
+- [`docs/backend/TRITON.md`](docs/backend/TRITON.md) — user-facing Triton backend doc
+- [`docs/performance/unified-backend.md`](docs/performance/unified-backend.md) — 4-mode perf baseline (correctness-preserving by construction)
+
+**Before proposing any change, read the goal doc and confirm your change advances it.** Changes that don't fit the goal are out of scope for this fork — even if they would be welcome upstream.
+
+---
+
 ## Guidelines for Contributors Using AI
 
 llama.cpp is built by humans, for humans. Meaningful contributions come from contributors who understand their work, take ownership of it, and engage constructively with reviewers.
