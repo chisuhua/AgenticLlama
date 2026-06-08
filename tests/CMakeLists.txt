@@ -308,3 +308,11 @@ if (TARGET gguf-model-data)
     target_link_libraries(export-graph-ops PRIVATE gguf-model-data)
     target_compile_definitions(export-graph-ops PRIVATE LLAMA_HF_FETCH)
 endif()
+
+# ggml-triton provider-registry unit test
+# Gated on GGML_TRITON being enabled (the test links against ggml-triton
+# and calls ggml_triton_global_registry()).
+if (GGML_TRITON)
+    llama_build_and_test(test-triton-registry.cpp)
+    target_link_libraries(test-triton-registry PRIVATE ggml-triton)
+endif()

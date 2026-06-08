@@ -82,8 +82,11 @@ if (GGML_TRITON)
     if(GGML_TRITON_WITH_CUTLASS)
         enable_language(CUDA)
 
-        set(GGML_CUTLASS_KERNELS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../ggml-cutlass/kernels)
-        set(CUTLASS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../ggml-cutlass/third_party/cutlass)
+        set(GGML_CUTLASS_KERNELS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/kernels/cutlass)
+        # CUTLASS_DIR removed — CUTLASS headers come from the kernels/cutlass/include/ dir
+        # (the old `third_party/cutlass` subdir is not copied over; if CUTLASS headers are
+        #  needed at build time they should be available via the existing kernels/cutlass
+        #  include path that target_include_directories() below sets up)
 
         target_sources(ggml-triton PRIVATE
             ggml-triton-provider-cutlass.cpp
@@ -98,15 +101,6 @@ if (GGML_TRITON)
             ${GGML_CUTLASS_KERNELS_DIR}/include
         )
 
-        # CUTLASS headers (if available)
-        if(EXISTS ${CUTLASS_DIR}/include/cutlass/cutlass.h)
-            target_include_directories(ggml-triton PRIVATE
-                ${CUTLASS_DIR}/include
-                ${CUTLASS_DIR}/tools/util/include
-            )
-            target_compile_definitions(ggml-triton PRIVATE GGML_CUTLASS_HAS_HEADERS)
-        endif()
-
         # Need CUDA Runtime API for CUTLASS kernels
         target_link_libraries(ggml-triton PRIVATE CUDA::cudart)
         target_compile_definitions(ggml-triton PRIVATE GGML_TRITON_HAS_CUTLASS)
@@ -118,6 +112,44 @@ if (GGML_TRITON)
             ${GGML_CUTLASS_KERNELS_DIR}/gemm_q4_0.cu
             ${GGML_CUTLASS_KERNELS_DIR}/gemm_q8_0.cu
             ${GGML_CUTLASS_KERNELS_DIR}/elementwise.cu
+            PROPERTIES LANGUAGE CUDA
+        )
+    endif()
+
+    # ------------------------------------------------------------------
+    # Optional: TileLang kernel provider
+    # ------------------------------------------------------------------
+    if (NOT GGML_TRITON_CPU_ONLY)
+        option(GGML_TRITON_WITH_TILELANG "Enable TileLang kernels in Triton backend" OFF)
+    endif()
+
+    if(GGML_TRITON_WITH_TILELANG)
+        set(GGML_TILELANG_KERNELS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/kernels/tilelang)
+        set(GGML_TILELANG_GENERATED_DIR ${GGML_TILELANG_KERNELS_DIR}/generated)
+        set(GGML_TILELANG_INCLUDE_DIR   ${GGML_TILELANG_KERNELS_DIR}/include)
+
+        file(GLOB GGML_TILELANG_GENERATED_SOURCES CONFIGURE_DEPENDS
+             "${GGML_TILELANG_GENERATED_DIR}/*.cu")
+
+        if (NOT GGML_TILELANG_GENERATED_SOURCES)
+            message(WARNING "ggml-triton: no TileLang generated kernels in ${GGML_TILELANG_GENERATED_DIR}; "
+                            "provider will be registered but cannot launch any kernel.")
+        endif()
+
+        target_sources(ggml-triton PRIVATE
+            ggml-triton-provider-tilelang.cpp
+            ${GGML_TILELANG_GENERATED_SOURCES}
+        )
+
+        target_include_directories(ggml-triton PRIVATE
+            ${GGML_TILELANG_INCLUDE_DIR}
+        )
+
+        target_link_libraries(ggml-triton PRIVATE CUDA::cudart)
+        target_compile_definitions(ggml-triton PRIVATE GGML_TRITON_HAS_TILELANG)
+
+        set_source_files_properties(
+            ${GGML_TILELANG_GENERATED_SOURCES}
             PROPERTIES LANGUAGE CUDA
         )
     endif()

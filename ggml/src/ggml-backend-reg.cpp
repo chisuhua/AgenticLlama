@@ -34,10 +34,6 @@
 #include "ggml-cuda.h"
 #endif
 
-#ifdef GGML_USE_CUTLASS
-#include "ggml-cutlass.h"
-#endif
-
 #ifdef GGML_USE_METAL
 #include "ggml-metal.h"
 #endif
@@ -90,10 +86,6 @@
 #include "ggml-openvino.h"
 #endif
 
-#ifdef GGML_USE_TILELANG
-#include "ggml-tilelang.h"
-#endif
-
 #ifdef GGML_USE_TRITON
 #include "ggml-triton.h"
 #endif
@@ -127,9 +119,6 @@ struct ggml_backend_registry {
     ggml_backend_registry() {
 #ifdef GGML_USE_CUDA
         register_backend(ggml_backend_cuda_reg());
-#endif
-#ifdef GGML_USE_CUTLASS
-        register_backend(ggml_backend_cutlass_reg());
 #endif
 #ifdef GGML_USE_METAL
         register_backend(ggml_backend_metal_reg());
@@ -175,9 +164,6 @@ struct ggml_backend_registry {
 #endif
 #ifdef GGML_USE_OPENVINO
         register_backend(ggml_backend_openvino_reg());
-#endif
-#ifdef GGML_USE_TILELANG
-        register_backend(ggml_backend_tilelang_reg());
 #endif
 #ifdef GGML_USE_TRITON
         register_backend(ggml_backend_triton_reg());
@@ -588,7 +574,6 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     ggml_backend_load_best("zendnn", silent, dir_path);
     ggml_backend_load_best("cann", silent, dir_path);
     ggml_backend_load_best("cuda", silent, dir_path);
-    ggml_backend_load_best("cutlass", silent, dir_path);
     ggml_backend_load_best("hip", silent, dir_path);
     ggml_backend_load_best("metal", silent, dir_path);
     ggml_backend_load_best("rpc", silent, dir_path);
@@ -599,7 +584,6 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     ggml_backend_load_best("hexagon", silent, dir_path);
     ggml_backend_load_best("musa", silent, dir_path);
     ggml_backend_load_best("openvino", silent, dir_path);
-    ggml_backend_load_best("tilelang", silent, dir_path);
     ggml_backend_load_best("triton", silent, dir_path);
     ggml_backend_load_best("cpu", silent, dir_path);
     // check the environment variable GGML_BACKEND_PATH to load an out-of-tree backend
