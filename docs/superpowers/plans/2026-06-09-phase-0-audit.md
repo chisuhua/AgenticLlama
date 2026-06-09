@@ -227,16 +227,96 @@ ggml/src/ggml-triton/ggml-triton-provider.{cpp,h}
 | `minimind-3-F16.gguf` | 新建 (128MB) | 转换后的 GGUF, **不入 git** (按 `minimind-integration.md` §4 的 gitignore 建议) |
 | `/tmp/aot-test/` | 临时 (4 placeholder) | AOT 失败 fallback 产物, 验证用, 不入 git |
 | 本文件 | 新建 | Phase 0 审计报告 |
+| `scripts/compile_kernels.py` | **修改 (Phase B.0)** | 适配 Triton 3.7.0 API (ASTSource + GPUTarget + backend.parse_options), +114/-13 |
 
-## 0.8 下一步
+## 0.8 Phase B.0 后续 (Triton 3.7.0 适配)
+
+### B.0 实际工作量
+
+~半天, 跟原 ROADMAP §0.6 估计一致. 改动 1 个文件 (`scripts/compile_kernels.py`),
++114/-13 行.
+
+### B.0 实际产出
+
+| 改动点 | 旧 API (Triton 2.x) | 新 API (Triton 3.7.0) |
+|---|---|---|
+| `triton.compile()` 调用 | `compile(fn, signature=..., constants=..., cc=...)` | `compile(src, target=..., options=...)` |
+| `src` 参数 | JITFunction 直接传 | `fn.ASTSource(fn=fn, constexprs=..., signature=..., attrs=...)` |
+| `target` 参数 | `cc=80` (int) | `GPUTarget("cuda", 80, 32)` (namedtuple) |
+| `options` 参数 | `constants=..., cc=...` (kwargs) | `backend.parse_options({"num_warps": 4, "num_stages": 1}).__dict__` (dict) |
+| `cubin` 取出 | `compiled.asm["cubin"]` | `compiled.asm[backend.binary_ext]` (instance attr, default `"cubin"`) |
+| 错误路径 | 模糊的 "unexpected keyword argument 'signature'" | 明确的 "no GPU driver available on this host" + 干净的 placeholder fallback |
+
+### B.0 关键发现: AOT 在 Triton 3.7.0 需要 torch + GPU
+
+跑 `create_binder()` 时 Triton 调用 `driver.active.get_current_target()`, 而
+`driver.active` 又通过 `CudaDriver.is_active()` 检查 `torch.cuda.is_available()`:
+
+```python
+@staticmethod
+def is_active():
+    try:
+        import torch
+        return torch.cuda.is_available() and (torch.version.hip is None)
+    except ImportError:
+        return False
+```
+
+本机 `torch.version.cuda = "13.0"` (有) 但 `torch.cuda.is_available() = False` (没 GPU)
+→ 整个 CUDA backend `is_active() = False` → `driver.active` 抛
+"0 active drivers" → AOT 走 placeholder fallback.
+
+**含义**: 即便 AOT 脚本 API 正确适配 Triton 3.7.0, **在无 GPU 机器上仍然无法
+AOT 编译** (Triton 3.7.0 的设计: AOT 必须在能跑 CUDA runtime 的环境上做).
+
+### B.0 的"是/否"回答
+
+| 目标 | 是否达成 |
+|---|---|
+| AOT 脚本适配 Triton 3.7.0 API (在 GPU host 上能工作) | ✅ |
+| 在本机 (无 GPU) 能跑真 AOT 拿到真实 CUBIN | ❌ (Triton 3.7.0 设计不允许) |
+| 在本机 graceful fallback 到 placeholder | ✅ |
+| cmake build 不破 | ✅ (100% build, 96% test pass) |
+| 生成的 `.c` 字节等同旧版本 | ✅ (4/4 byte-identical) |
+
+### B.0 对 Phase B.1 的实际影响
+
+B.1 (RMSNorm provider) 的 4 步流程:
+1. 写 Triton DSL (`triton_kernels/rmsnorm.py`) — **本机能做** ✓
+2. 在 `kernel_registry.json` 加条目 — **本机能做** ✓
+3. 跑 `compile_kernels.py` 出 `.c/.h` — **本机会走 placeholder, 不出真 CUBIN** ⚠️
+4. 写 `ggml-triton-provider-rmsnorm.{h,cpp}` + 注册 + 测试 — **本机能做** ✓
+
+**B.1 的工作可以在本机完成, 除了 step 3 在本机只产 placeholder. 真实 CUBIN
+要在 GPU host 上重跑 step 3 才能拿到.**
+
+如果把 placeholder CUBIN 用作 build, `libggml-triton.so` 会成功 build (因为
+launcher 代码是有效的 C, 只有加载 CUBIN 那一步会失败), 但 `test-backend-ops`
+里跑 RMSNorm 路径时会因为 `cuModuleLoadData` 拿到 16 字节 ELF 头而 launch
+失败. 这意味着 **B.1 的"test-backend-ops 全绿"退出标准** 在本机**无法验证**,
+必须等 GPU host 兜底.
+
+但其他两个退出标准本机能验证:
+- `test-triton-registry.cpp` 3 个新 provider 注册断言通过 ✓
+- 在 GGML_LOG_LEVEL=DEBUG 下, Qwen3 graph op 路由日志显示 provider 命中 ✓
+  (路由发生在 dispatch 层, 不需要真 CUBIN)
+
+### B.0 给 doc 的 follow-up
+
+`TRITON.md` §"已知问题" 提到"首次构建需要装 triton". 应该加一条:
+- "Triton 3.7.0+ 的 AOT 编译需要 `torch` + `torch.cuda.is_available()` 即
+  `nvidia-smi` 能看见设备. 没有 GPU 时 AOT 自动 fallback 到 placeholder CUBIN,
+  build 不会失败, 但运行时 `cuLaunchKernel` 会失败."
+
+## 0.9 下一步 (修订后)
 
 按修订后的顺序:
-1. **今天**: 修 `scripts/compile_kernels.py` (Phase B.0)
-2. **明天起**: 启动 Phase B.1 RMSNorm (按 ROADMAP §3 详细分解的 4 步流程)
-3. (并行): 推 GPU host 申请 (Phase A 阻塞解除)
+1. **今天**: 已完成 — Phase B.0 修 AOT 脚本 + 加 graceful fallback (本次)
+2. **明天起**: Phase B.1 RMSNorm (本机可完成 step 1/2/4, step 3 产 placeholder)
+3. (并行): 推 GPU host 申请 (Phase A 阻塞解除 + B.1 step 3 真 CUBIN 兜底)
 4. (异步): B.2 RoPE, B.3 FlashAttn 排进 subagent 队列
 
-## 0.9 致谢
+## 0.10 致谢
 
 Oracle 戳中 "Phase B 在 CPU box 上可能不成立" 这个盲点, 节省了可能的 3+ 天浪费
 (写完 RMSNorm → 跑 test-backend-ops → 才发现 AOT 根本不工作). 这次审计的 ROI
