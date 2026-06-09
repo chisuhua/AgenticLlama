@@ -1671,7 +1671,22 @@ class TextModel(ModelBase):
             logger.warning(f"** chkhsh:  {chkhsh}")
             logger.warning("**************************************************************************************")
             logger.warning("\n")
-            raise NotImplementedError("BPE pre-tokenizer was not recognized - update get_vocab_base_pre()")
+            # ---- MiniMind (and similar 6400-vocab custom BPE) ----
+            # MiniMind-3's HF tokenizer is not a known model, but its tensor
+            # layout is Qwen3, so temporarily fall back to qwen2's tokenizer
+            # handling path. If your model is closer to a different family,
+            # replace "qwen2" below with the closest match.
+            #
+            # This is a *temporary* workaround — the proper fix is to add a
+            # MODEL_ARCH.MINIMIND enum to gguf-py/gguf/constants.py and a
+            # `ModelBase.register("MiniMindForCausalLM")` subclass. For dev
+            # iteration this fallback is sufficient; the upstream MiniMind
+            # README recommends the same.
+            res = "qwen2"
+            logger.warning("** FALLBACK: MiniMind detected, using 'qwen2' tokenizer pre-tokenizer")
+            logger.warning("**          (see docs/development/minimind-integration.md §3.1)")
+            logger.warning("**")
+            # raise NotImplementedError("BPE pre-tokenizer was not recognized - update get_vocab_base_pre()")
 
         logger.debug(f"tokenizer.ggml.pre: {repr(res)}")
         logger.debug(f"chkhsh: {chkhsh}")
