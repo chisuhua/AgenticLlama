@@ -10,9 +10,9 @@
 - ✅ **Task 1**：Triton 多 kernel 后端统一（PR #1 已 merge，post-merge fix 已 push）
 - ✅ **Task 2**：MiniMind-3 端到端文档 + CPU-only 基线（`minimind-integration.md`，perplexity + bench 命令齐全）
 - ⏸ **Task 3**：GPU 性能门禁（4-mode 对比表，deferred 到 GPU host，理论正确性已论证）
-- ⏸ **Task 4**：kernel 集扩展（只覆盖 GELU/SiLU/GEMM/ADD/MUL；Qwen3 推理图上的 RMSNorm/RoPE/FlashAttn 缺）
+- 🔄 **Task 4**：kernel 集扩展——**B.1 RMSNorm ✅**（commit `418f88b9f`，unweighted + weighted × fp16/fp32 = 4 impls；`test-triton-registry` 验证；B.2 RoPE / B.3 FlashAttn 待做）
 
-fork 当前**目的性正确性**已立（CPU-only 跑得通 MiniMind-3、4-mode 行为等价），
+fork 当前**目的性正确性**已立（CPU-only 跑得通 MiniMind-3、4-mode 行为等价、RMSNorm provider 通路打通），
 但**目的性性能**还没拿到——需要在 GPU 上把 MiniMind-3 跑在 ggml-triton 后端
 上（而不是 fallback 到 ggml-cpu），证明自研后端有实际加速。
 
@@ -29,7 +29,7 @@ fork 当前**目的性正确性**已立（CPU-only 跑得通 MiniMind-3、4-mode
 │  ──── 验证: docs/performance/unified-backend.md 的 4-mode 数字全到位 ── │
 │                                                                          │
 │ Phase B: kernel 集覆盖 Qwen3 (Task 4)   — CPU-only box 可启动           │
-│   B.1 RMSNorm provider (fp16/fp32)  — Triton AOT                       │
+│   B.1 RMSNorm provider (fp16/fp32)  — Triton AOT  ✅ (commit 418f88b9f) │
 │   B.2 RoPE provider (neox 风格, Qwen3 用)  — Triton AOT                 │
 │   B.3 FlashAttn provider (标准 fp16, 不带 KV cache 长上下文)            │
 │   B.4 Provider registry 接入 + test-backend-ops 全绿                    │
@@ -90,11 +90,11 @@ fork 当前**目的性正确性**已立（CPU-only 跑得通 MiniMind-3、4-mode
 | Op 族 | ggml-triton 内现状 | MiniMind-3 (Qwen3) 是否需要 | 阻塞性 |
 |---|---|---|---|
 | `MUL_MAT` (GEMM) | CUTLASS, f16/f32/q4_0/q8_0 | ✅ 全 transformer 块 + LM head | — |
-| `RMS_NORM` | ❌ 无 | ✅ 每层 2 次 (pre-attn + pre-MLP) | **高** |
-| `ROPE` (neox) | ❌ 无 | ✅ 每层 2 次 (Q, K) | **高** |
-| `FLASH_ATTN_EXT` | ❌ 无 | ✅ 每层 1 次 (Q × K^T → softmax → × V) | **高** |
-| `GELU` / `SILU` | Triton AOT (f16/f32) | ✅ SwiGLU gate 用 SiLU | — |
-| `ADD` / `MUL` | TileLang (f16/f32) | ✅ residual add | — |
+| `RMS_NORM` | ✅ Triton AOT (B.1, unweighted + weighted × fp16/fp32 = 4 impls) | ✅ 每层 2 次 (pre-attn + pre-MLP) | 已解决 (B.1 ✅)。Stage 1 限制 `ne00 ≤ 1024` 待 multi-block 变体 |
+| `ROPE` (neox) | ❌ 无 | ✅ 每层 2 次 (Q, K) | **高** (B.2 待做) |
+| `FLASH_ATTN_EXT` | ❌ 无 | ✅ 每层 1 次 (Q × K^T → softmax → × V) | **高** (B.3 待做，最大块) |
+| `GELU` / `SILU` | Triton AOT (f16/fp32) | ✅ SwiGLU gate 用 SiLU | — |
+| `ADD` / `MUL` | TileLang (f16/fp32) | ✅ residual add | — |
 | `MUL_MAT_ID` (专家) | ❌ 无 | ❌ MiniMind-3 是 Dense 不需要；198M-A64M MoE 才需要 | 低 |
 
 **每个新增 provider 的标准流程**（4 步循环）：
@@ -115,6 +115,23 @@ fork 当前**目的性正确性**已立（CPU-only 跑得通 MiniMind-3、4-mode
 - kernel 算法：标准 `y = x * rsqrt(mean(x^2) + eps) * weight`
 - Triton DSL 行数：~30 行（含 `tl.load` / `tl.sum` / `tl.rsqrt` / `tl.store`）
 - 复用现有 `elementwise` AOT 框架
+
+**B.1 完成情况**（commit `418f88b9f`，plan 在 `docs/superpowers/plans/2026-06-10-rmsnorm-triton-aot.md`）：
+- ✅ 实现按 **unweighted / weighted × fp16 / fp32 = 4 个 impls**——unweighted 是
+  MiniMind-3 / `test_rms_norm` 实际走的路径（`src[1]==nullptr`），weighted 走融合
+  RMSNorm（`src[1]!=nullptr`）。
+- ✅ `test-triton-registry` 加 Assert 4 验证 4 个 triton AOT impls 全部在
+  global registry（exit 0）。
+- ✅ `test-backend-ops` 在 CPU baseline 路径上仍 100% pass。
+- ✅ `GGML_TRITON_WITH_RMSNORM` CMake option（默认 ON）镜像 CUTLASS / TileLang
+  模式——CI 可独立 flip 旗标做 bisect。
+- ⚠️ **Stage 1 已知限制**（详见 `ggml-custom-backends.md` §"已知失败模式"）：
+  - 行长 `ne00 > 1024` → CPU fallback（待 multi-block 变体）
+  - eps 烘焙 `1e-6`（`± 1e-7` tolerance 闸门）→ 偏离时 CPU fallback（待 Stage 2 运行时 eps）
+  - 真实 CUBIN 生成在 CPU-only host 上是 16-byte ELF-magic placeholder（Phase 0
+    audit §0.4，GPU host 上回归后会得到真实 CUBIN）
+- 📦 **完整 plan + 14 步 TDD 执行档案**：`docs/superpowers/plans/2026-06-10-rmsnorm-triton-aot.md`。
+  关键设计决策（per Oracle review）已写进 plan §1-§10 自审。
 
 **B.2 RoPE 的具体设计**：
 - 入口 op：`GGML_OP_ROPE`（neox 风格，Qwen3 用）
@@ -225,14 +242,21 @@ D 是 nice-to-have，不阻塞目标达成。
 
 - [`README.md`](README.md) §"当前状态" 表 = 本路线图的"现状"小节
 - [`ggml-custom-backends.md`](ggml-custom-backends.md) = 路线图 Phase B 的
-  "操作手册"（如何加新 provider 的 4 步流程）
+  "操作手册"（如何加新 provider 的 4 步流程）+ §"已知失败模式" 记录 B.1
+  揭示的设计权衡
 - [`minimind-integration.md`](minimind-integration.md) = Phase C 的端到端
   recipe
-- [`test-pyramid.md`](test-pyramid.md) = Phase A/C 的测试门禁
+- [`test-pyramid.md`](test-pyramid.md) = Phase A/C 的测试门禁（已
+  在 B.1 commit 中标记 RMSNorm 为 covered op）
 - [`../performance/unified-backend.md`](../performance/unified-backend.md)
   = Phase A 的填空区 + Phase C 的扩展区
 - [`../superpowers/plans/baseline-deferral.md`](../superpowers/plans/baseline-deferral.md)
   = Phase A 的精确 recipe
+- [`../superpowers/plans/2026-06-10-rmsnorm-triton-aot.md`](../superpowers/plans/2026-06-10-rmsnorm-triton-aot.md)
+  = B.1 RMSNorm provider 的完整执行 plan（15 task / 2 stage），含 Oracle
+  审查反馈、Stage 1 限制、Stage 2 升级路径
+- [`../superpowers/plans/2026-06-09-phase-0-audit.md`](../superpowers/plans/2026-06-09-phase-0-audit.md)
+  = Phase 0 环境前提审计（B.1 引用 §0.4 的 placeholder CUBIN 现实）
 
 ## 8. 何时更新本页
 

@@ -160,9 +160,53 @@ int triton_launch_<kernel>_<dtype>_<arch>(CUstream stream,
 
 | 算子 | 数据类型 | 实现状态 |
 |------|---------|---------|
-| GELU | FP16, FP32 | ✅ 已实现 |
-| SILU | FP16, FP32 | ✅ 已实现 |
+| GELU | FP16, FP32 | ✅ 已实现 (PR #1) |
+| SILU | FP16, FP32 | ✅ 已实现 (PR #1) |
+| RMS_NORM (unweighted) | FP16, FP32 | ✅ 已实现 (B.1, commit `418f88b9f`); 4 impls = unweighted/weighted × fp16/fp32 |
+| RMS_NORM (weighted, `src[1]!=nullptr`) | FP16, FP32 | ✅ 已实现 (B.1) |
 | NONE/VIEW/RESHAPE/PERMUTE/TRANSPOSE/CONT | - | ✅ Pass-through |
+
+> **B.1 RMSNorm 设计要点**：unweighted variant 是 MiniMind-3 和
+> `test_rms_norm` 实际走的路径（`ggml_rms_norm(ctx, a, eps)` 不传 weight，
+> `src[1]==nullptr`）；weight 作为独立 `ggml_mul` op 后续应用。weighted
+> variant 走融合 RMSNorm。两个 family 通过 `triton_kernels/rms_norm.py`
+> 里的 `USE_WEIGHT: tl.constexpr` 分支；launcher 各自独立命名
+> (`triton_launch_rms_norm_unweighted_*` vs `_weighted_*`) 不冲突。
+> 完整 plan：`docs/superpowers/plans/2026-06-10-rmsnorm-triton-aot.md`。
+
+### 3.6 已知失败模式 / 设计权衡（B.1 揭示）
+
+B.1 RMSNorm provider 在 CPU-only dev box 上跑通后，下面这些限制和权衡
+是接手 B.2 / B.3 的人需要知道的（其中 Stage 1 限制由 ROADMAP §3 Phase B.1
+退出标准的"待办"项背书，Stage 2 限制由 plan §Stage 2 章节背书）：
+
+| 编号 | 限制 | 触发条件 | 行为 | 解决路径 |
+|------|------|---------|------|---------|
+| **F1** | Placeholder CUBIN（无 GPU driver 时） | 任何在无 NVIDIA driver / 无 SM 设备的机器上跑 `scripts/compile_kernels.py` | `.c` 文件嵌入 16 字节 ELF-magic 占位符；launcher 编译 OK，运行 `load_module_once()` 失败返回 `-1`；provider `execute` 返回 `false` → dispatcher fallback 到 CPU provider | 在真实 GPU host 上跑（需要先 patch `compile_kernels.py` 适配 Triton 3.7.0 API——见 Phase 0 audit §0.4） |
+| **F2** | `ne00 > 1024` 行长不支持 | RMS_NORM 节点的 `src[0]->ne[0] > 1024`（MiniMind-3 64M hidden=512 不会触发；但 Qwen3-7B hidden=3584 会） | `supports()` 返回 `false` → per-node fallback 到 CPU provider（不影响同一图里其它小行 op） | 多 block 变体（`BLOCK_SIZE=2048` 等家族），下个 Phase B 子任务加 |
+| **F3** | Eps 烘焙 `1e-6`（constexpr） | 任何 `eps` 不在 `1.0e-6 ± 1.0e-7` 容差带内的节点 | `supports()` 返回 `false` → fallback 到 CPU provider | Stage 2: 新增 `_v2` 变体走运行时 eps launcher；本 Stage 1 variant 保留 fallback 路径 |
+| **F4** | `compile_kernels.py` 的全局 ABI 风险 | 如果有人把 `_emit_header` 改成全局参数化（覆盖 default shape）| 所有 4 个 GELU/SiLU launcher 重新生成 → `ggml-triton-provider-triton.cpp` 的 4 个 call site 编译错误 | 当前用 per-kernel `LAUNCHER_SHAPES` 表（key `default` 走硬编码模板，新 kernel 走参数化模板），加新 kernel 走单独 entry |
+| **F5** | 没 DEBUG log 探针 | 想看 dispatcher 把哪个 op 路由到哪个 provider | 看不到（`ggml-triton-dispatch.cpp:59` 只打 "unsupported"，不打 "selected"） | 跟 plan §"Optional follow-up" 同步：加 `GGML_LOG_DEBUG("selected impl %s for op %s", ...)` 即可 |
+| **F6** | TileLang / CUTLASS 编译受 `compile_kernels.py` 全局驱动 | 任何对 `kernel_registry.json` 的 `kernels` 数组改动都会触发全部重 emit（包括 GELU/SiLU） | 已 commit 的 GELU/SiLU `.c/.h` 重新生成（cosmetic-only diff；函数签名 byte-identical） | `git diff ggml/src/ggml-triton/kernels/generated/gelu_*.{c,h}` 应只在 cosmetic 范围，否则 `LAUNCHER_SHAPES` 有 regression |
+
+**核实命令**（接手人跑这些 sanity-check 就够了）：
+
+```bash
+# F1: 验证 launcher 真的能跑 placeholder 路径（应 return -1 不 crash）
+nm -D build/bin/libggml-triton.so | grep triton_launch_rms_norm
+#   应见 4 个 T/U 符号
+
+# F2/F3: 验证 supports() 闸门在 edge case 正确 fallback
+./build/bin/test-triton-registry   # 跑所有 4 个 impls 存在即可（已在 B.1 commit 验证）
+
+# F4: 验证 default 路径没被脏改
+git diff ggml/src/ggml-triton/kernels/generated/gelu_*.{c,h} \
+        ggml/src/ggml-triton/kernels/generated/silu_*.{c,h}
+#   应空 / cosmetic-only
+```
+
+完整 plan（含每条限制的解决路径设计）见
+`docs/superpowers/plans/2026-06-10-rmsnorm-triton-aot.md`。
 
 ---
 

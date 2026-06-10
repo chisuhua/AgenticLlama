@@ -18,7 +18,7 @@
 | **1. 统一 Triton 多 kernel 后端**（CUTLASS + TileLang 折进 ggml-triton） | ✅ 完成（PR #1，squash-merged into master） | [`PR #1`](https://github.com/chisuhua/AgenticLlama/pull/1)、计划 `.omo/plans/2026-06-08-unify-triton-multi-kernel-backend.md`、`docs/performance/unified-backend.md` |
 | **2. MiniMind-3 端到端集成**（HF → GGUF → llama-cli/llama-server） | ✅ 文档完成 + 基线（CPU-only）已捕获 | [`minimind-integration.md`](minimind-integration.md) |
 | **3. 端到端 GPU 验证 + 性能门禁**（4 个 mode 的 perplexity + llama-bench） | ⏸ 部分 deferred 到 GPU host | `docs/superpowers/plans/baseline-deferral.md` "What to do on a GPU host" 一节 |
-| **4. kernel 集扩展**（逐步覆盖 Qwen3 推理图上所有 op） | ⏸ 进行中 | `ggml/src/ggml-triton/kernels/registry/`、`docs/backend/TRITON.md` §"已知问题" |
+| **4. kernel 集扩展**（逐步覆盖 Qwen3 推理图上所有 op） | 🔄 进行中——**B.1 RMSNorm ✅** (commit `418f88b9f`)，B.2 RoPE / B.3 FlashAttn 待做 | `ggml/src/ggml-triton/ggml-triton-provider-rmsnorm.{h,cpp}`、plan `docs/superpowers/plans/2026-06-10-rmsnorm-triton-aot.md`、ROADMAP §1 / §3 |
 
 如果只读一份文档就读这个表——剩下的都是展开。
 
