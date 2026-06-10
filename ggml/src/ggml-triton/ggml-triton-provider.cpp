@@ -1,5 +1,9 @@
 #include "ggml-triton-provider.h"
 
+#ifdef GGML_TRITON_HAS_RMSNORM
+#include "ggml-triton-provider-rmsnorm.h"
+#endif
+
 #ifdef GGML_TRITON_HAS_CUTLASS
 #include "ggml-triton-provider-cutlass.h"
 #endif
@@ -61,6 +65,9 @@ ggml_triton_op_registry & ggml_triton_global_registry() {
     std::call_once(flag, []() {
         ggml_triton_register_cpu_providers(registry);
         ggml_triton_register_builtin_providers(registry);
+#ifdef GGML_TRITON_HAS_RMSNORM
+        ggml_triton_register_rmsnorm_providers(registry);
+#endif
 #ifdef GGML_TRITON_HAS_CUTLASS
         ggml_triton_register_cutlass_providers(registry);
 #endif

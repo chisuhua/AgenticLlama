@@ -83,6 +83,39 @@ int main() {
                 found_tilelang ? "registered" : "not registered");
 #endif
 
+    // Assert 4 (B.1): the Triton AOT RMSNorm provider (fp16 + fp32) must be
+    // registered for GGML_OP_RMS_NORM. The CPU fp32 entry already exists
+    // (see ggml-triton-provider-cpu.cpp:785-790) — we are specifically
+    // asserting that the *triton AOT* entries get added by the new
+    // ggml-triton-provider-rmsnorm.{h,cpp} files (Task 8) and are reachable
+    // from the global registry.
+    bool found_triton_rms_norm_fp16 = false;
+    bool found_triton_rms_norm_fp32 = false;
+    if (auto * impls = reg.get_impls(GGML_OP_RMS_NORM)) {
+        for (const auto & impl : *impls) {
+            const std::string n = impl.name;
+            if (impl.provider == GGML_TRITON_PROVIDER_TRITON && n.find("fp16") != std::string::npos) {
+                found_triton_rms_norm_fp16 = true;
+                std::printf("found RMS_NORM impl: name=%s provider=%d priority=%d\n",
+                            impl.name, (int) impl.provider, impl.priority);
+            }
+            if (impl.provider == GGML_TRITON_PROVIDER_TRITON && n.find("fp32") != std::string::npos) {
+                found_triton_rms_norm_fp32 = true;
+                std::printf("found RMS_NORM impl: name=%s provider=%d priority=%d\n",
+                            impl.name, (int) impl.provider, impl.priority);
+            }
+        }
+    }
+    if (!found_triton_rms_norm_fp16) {
+        std::fprintf(stderr, "FAIL: triton AOT RMS_NORM fp16 provider not registered in global registry\n");
+        return 4;
+    }
+    if (!found_triton_rms_norm_fp32) {
+        std::fprintf(stderr, "FAIL: triton AOT RMS_NORM fp32 provider not registered in global registry\n");
+        return 5;
+    }
+    std::printf("Assert 4 passed: triton AOT RMS_NORM fp16 + fp32 providers are registered\n");
+
     std::printf("OK: registry test passed\n");
     return 0;
 }

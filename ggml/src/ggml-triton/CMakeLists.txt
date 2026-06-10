@@ -55,6 +55,22 @@ if (GGML_TRITON)
         )
     endif()
 
+    # ------------------------------------------------------------------
+    # Optional: RMSNorm kernel provider (B.1, default ON)
+    # ------------------------------------------------------------------
+    if (NOT GGML_TRITON_CPU_ONLY)
+        option(GGML_TRITON_WITH_RMSNORM "Enable RMSNorm kernels in Triton backend" ON)
+    endif()
+
+    if(GGML_TRITON_WITH_RMSNORM)
+        list(APPEND GGML_TRITON_GPU_SRC
+            ${TRITON_GENERATED_DIR}/rms_norm_unweighted_fp16_sm80.c
+            ${TRITON_GENERATED_DIR}/rms_norm_unweighted_fp32_sm80.c
+            ${TRITON_GENERATED_DIR}/rms_norm_weighted_fp16_sm80.c
+            ${TRITON_GENERATED_DIR}/rms_norm_weighted_fp32_sm80.c
+            ggml-triton-provider-rmsnorm.cpp)
+    endif()
+
     ggml_add_backend_library(ggml-triton
                              ggml-triton.cpp
                              ggml-triton-buffer.cpp
@@ -63,6 +79,10 @@ if (GGML_TRITON)
                              ggml-triton-provider-cpu.cpp
                              ${GGML_TRITON_GPU_SRC}
                             )
+
+    if(GGML_TRITON_WITH_RMSNORM)
+        target_compile_definitions(ggml-triton PRIVATE GGML_TRITON_HAS_RMSNORM)
+    endif()
 
     target_include_directories(ggml-triton PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}

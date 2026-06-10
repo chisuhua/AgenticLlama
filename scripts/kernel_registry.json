@@ -4,6 +4,44 @@
   "default_num_warps": 4,
   "kernels": [
     {
+      "name": "rms_norm_unweighted",
+      "module": "triton_kernels.rms_norm",
+      "function": "rms_norm_kernel",
+      "variants": [
+        {
+          "dtype": "fp16",
+          "arch":  "sm80",
+          "specialise": { "BLOCK_SIZE": 1024, "EPS": 1.0e-6, "USE_WEIGHT": 0 },
+          "signature": "*fp16,*fp16,i32,1024,1e-06,0"
+        },
+        {
+          "dtype": "fp32",
+          "arch":  "sm80",
+          "specialise": { "BLOCK_SIZE": 1024, "EPS": 1.0e-6, "USE_WEIGHT": 0 },
+          "signature": "*fp32,*fp32,i32,1024,1e-06,0"
+        }
+      ]
+    },
+    {
+      "name": "rms_norm_weighted",
+      "module": "triton_kernels.rms_norm",
+      "function": "rms_norm_kernel",
+      "variants": [
+        {
+          "dtype": "fp16",
+          "arch":  "sm80",
+          "specialise": { "BLOCK_SIZE": 1024, "EPS": 1.0e-6, "USE_WEIGHT": 1 },
+          "signature": "*fp16,*fp16,*fp16,i32,1024,1e-06,1"
+        },
+        {
+          "dtype": "fp32",
+          "arch":  "sm80",
+          "specialise": { "BLOCK_SIZE": 1024, "EPS": 1.0e-6, "USE_WEIGHT": 1 },
+          "signature": "*fp32,*fp32,*fp32,i32,1024,1e-06,1"
+        }
+      ]
+    },
+    {
       "name": "gelu",
       "module": "triton_kernels.elementwise",
       "function": "gelu_kernel",

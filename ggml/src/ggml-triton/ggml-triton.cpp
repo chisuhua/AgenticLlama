@@ -3,6 +3,10 @@
 #include "ggml-triton-dispatch.h"
 #include "ggml-triton-provider.h"
 
+#ifdef GGML_TRITON_HAS_RMSNORM
+#include "ggml-triton-provider-rmsnorm.h"
+#endif
+
 #ifdef GGML_TRITON_HAS_CUTLASS
 #include "ggml-triton-provider-cutlass.h"
 #endif
@@ -418,6 +422,9 @@ ggml_backend_t ggml_backend_triton_init(int device) {
     // Register kernel providers for this backend instance
     ggml_triton_register_builtin_providers(ctx->op_registry);
     ggml_triton_register_cpu_providers(ctx->op_registry);
+#ifdef GGML_TRITON_HAS_RMSNORM
+    ggml_triton_register_rmsnorm_providers(ctx->op_registry);
+#endif
 #ifdef GGML_TRITON_HAS_CUTLASS
     ggml_triton_register_cutlass_providers(ctx->op_registry);
 #endif
@@ -472,6 +479,9 @@ ggml_backend_t ggml_backend_triton_init(int device) {
 
     // Register kernel providers for this backend instance
     ggml_triton_register_builtin_providers(ctx->op_registry);
+#ifdef GGML_TRITON_HAS_RMSNORM
+    ggml_triton_register_rmsnorm_providers(ctx->op_registry);
+#endif
 #ifdef GGML_TRITON_HAS_CUTLASS
     ggml_triton_register_cutlass_providers(ctx->op_registry);
 #endif

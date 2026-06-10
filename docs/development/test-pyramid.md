@@ -62,6 +62,15 @@ curl -s http://localhost:8080/v1/chat/completions \
 | 改了什么 | 该跑的测试 | 为什么是这些 |
 |---|---|---|
 | **任何 ggml op**（matmul / rope / norm / softmax / silu / quant / dequant / ...） | `test-backend-ops` | 每个 op 都跟参考实现对一遍。**`CONTRIBUTING.md` 强制要求**。 |
+
+> **ggml-triton op 覆盖现状（截至 B.1 / RMSNorm）：**
+> - `GGML_OP_UNARY` (GELU, SILU — fp16 + fp32)
+> - `GGML_OP_RMS_NORM` (unweighted + weighted — fp16 + fp32，4 个 impl)
+> - `GGML_OP_ADD` / `GGML_OP_MUL` (TileLang, conditional on `GGML_TRITON_HAS_TILELANG`)
+> - `GGML_OP_MUL_MAT` (CUTLASS, conditional on `GGML_TRITON_WITH_CUTLASS`)
+>
+> 完整 list 见 `scripts/kernel_registry.json` (kernels 数组) 以及
+> 每个 provider 的 `register_impl` 调用。
 | **量化** | `test-quantize-fns`、`test-quantize-perf`、`test-quantize-stats`、`test-quant-type-selection`、`test-autorelease` | 量化全链路 |
 | **RoPE / 位置编码** | `test-rope` | 精准命中——同时也覆盖 YaRN |
 | **模型 loader / 架构识别 / tokenizer 接线** | `test-llama-archs`、`test-gguf`、`test-gguf-model-data`、`test-model-load-cancel` | `test-llama-archs` 会为**每一个**已注册架构跑"建图 + 前向 + 写回 GGUF"——loader 最强的端到端测试 |
