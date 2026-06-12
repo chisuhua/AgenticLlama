@@ -191,7 +191,7 @@ int triton_launch_rope_<mode>_<sin>_<yarn>_<dtype>_sm80(
     float       corr_high);       // YaRN only: corr_dims[1] pre-computed by launcher
 ```
 
-**Total args after stream**: **18** (3 ptrs + 1 n_dims + 1 n_ctx_orig + 6 YaRN floats + 4 MROPE section ints + 2 corr_dims).
+**Total args after stream (MROPE case)**: **17** (3 ptrs + 1 n_dims + 1 n_ctx_orig + 6 YaRN floats + 4 MROPE section ints + 2 corr_dims). NORMAL/NEOX have 13 args (no MROPE sections, no corr_dims needed at zero; corr_dims still passed but always zero-initialized at this stage).
 
 ### 3.2 Per-mode ABI shape (extends B.1's `LAUNCHER_SHAPES` pattern)
 
