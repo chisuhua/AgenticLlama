@@ -71,6 +71,42 @@ if (GGML_TRITON)
             ggml-triton-provider-rmsnorm.cpp)
     endif()
 
+    # ------------------------------------------------------------------
+    # Optional: RoPE kernel provider (B.2, default ON)
+    # ------------------------------------------------------------------
+    if (NOT GGML_TRITON_CPU_ONLY)
+        option(GGML_TRITON_WITH_ROPE "Enable RoPE kernels in Triton backend" ON)
+    endif()
+
+    if(GGML_TRITON_WITH_ROPE)
+        list(APPEND GGML_TRITON_GPU_SRC
+            ${TRITON_GENERATED_DIR}/rope_normal_fwd_yarnoff_fp16_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_normal_fwd_yarnoff_fp32_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_normal_fwd_yarnon_fp16_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_normal_fwd_yarnon_fp32_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_normal_bwd_yarnoff_fp16_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_normal_bwd_yarnoff_fp32_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_normal_bwd_yarnon_fp16_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_normal_bwd_yarnon_fp32_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_neox_fwd_yarnoff_fp16_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_neox_fwd_yarnoff_fp32_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_neox_fwd_yarnon_fp16_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_neox_fwd_yarnon_fp32_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_neox_bwd_yarnoff_fp16_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_neox_bwd_yarnoff_fp32_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_neox_bwd_yarnon_fp16_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_neox_bwd_yarnon_fp32_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_mrope_fwd_yarnoff_fp16_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_mrope_fwd_yarnoff_fp32_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_mrope_fwd_yarnon_fp16_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_mrope_fwd_yarnon_fp32_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_mrope_bwd_yarnoff_fp16_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_mrope_bwd_yarnoff_fp32_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_mrope_bwd_yarnon_fp16_sm80.c
+            ${TRITON_GENERATED_DIR}/rope_mrope_bwd_yarnon_fp32_sm80.c
+            ggml-triton-provider-rope.cpp)
+    endif()
+
     ggml_add_backend_library(ggml-triton
                              ggml-triton.cpp
                              ggml-triton-buffer.cpp
@@ -82,6 +118,10 @@ if (GGML_TRITON)
 
     if(GGML_TRITON_WITH_RMSNORM)
         target_compile_definitions(ggml-triton PRIVATE GGML_TRITON_HAS_RMSNORM)
+    endif()
+
+    if(GGML_TRITON_WITH_ROPE)
+        target_compile_definitions(ggml-triton PRIVATE GGML_TRITON_HAS_ROPE)
     endif()
 
     target_include_directories(ggml-triton PRIVATE
