@@ -269,6 +269,62 @@ LAUNCHER_SHAPES = {
         ("CUdeviceptr", "d_y"),
         ("int32_t",     "N"),
     ],
+    # B.2 RoPE shapes.  Per-mode ABI (counted after the stream param that
+    # _format_params_lines prepends):
+    #   rope_normal/rope_neox: 2 ptrs (a, b) + 10 scalar args (n_dims,
+    #                            n_ctx_orig, 6 YaRN floats, 2 corr_dims)
+    #                            = 12 args after stream
+    #   rope_mrope:             3 ptrs (a, b, freq_factors) + 14 scalar args
+    #                            (n_dims, n_ctx_orig, 6 YaRN floats, 4 MROPE
+    #                            sect ints, 2 corr_dims) = 17 args after stream
+    #   See commit b815d418b — earlier draft had 18 (off-by-one), corrected to 17.
+    "rope_normal": [
+        ("CUdeviceptr", "a"),
+        ("CUdeviceptr", "b"),
+        ("int32_t",     "n_dims"),
+        ("int32_t",     "n_ctx_orig"),
+        ("float",       "freq_base"),
+        ("float",       "freq_scale"),
+        ("float",       "ext_factor"),
+        ("float",       "attn_factor"),
+        ("float",       "beta_fast"),
+        ("float",       "beta_slow"),
+        ("float",       "corr_low"),
+        ("float",       "corr_high"),
+    ],
+    "rope_neox": [
+        ("CUdeviceptr", "a"),
+        ("CUdeviceptr", "b"),
+        ("int32_t",     "n_dims"),
+        ("int32_t",     "n_ctx_orig"),
+        ("float",       "freq_base"),
+        ("float",       "freq_scale"),
+        ("float",       "ext_factor"),
+        ("float",       "attn_factor"),
+        ("float",       "beta_fast"),
+        ("float",       "beta_slow"),
+        ("float",       "corr_low"),
+        ("float",       "corr_high"),
+    ],
+    "rope_mrope": [
+        ("CUdeviceptr", "a"),
+        ("CUdeviceptr", "b"),
+        ("CUdeviceptr", "freq_factors"),
+        ("int32_t",     "n_dims"),
+        ("int32_t",     "n_ctx_orig"),
+        ("float",       "freq_base"),
+        ("float",       "freq_scale"),
+        ("float",       "ext_factor"),
+        ("float",       "attn_factor"),
+        ("float",       "beta_fast"),
+        ("float",       "beta_slow"),
+        ("int32_t",     "sect_t"),
+        ("int32_t",     "sect_h"),
+        ("int32_t",     "sect_w"),
+        ("int32_t",     "sect_e"),
+        ("float",       "corr_low"),
+        ("float",       "corr_high"),
+    ],
 }
 
 
