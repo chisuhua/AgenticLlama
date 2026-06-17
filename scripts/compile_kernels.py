@@ -45,6 +45,16 @@ class Variant:
 
     @property
     def tag(self) -> str:
+        # Fold the constexpr-specialised axes that the AOT driver cares about
+        # into the filename so each variant emits its own .c/.h pair.  This is
+        # what enables 24 distinct launchers for RoPE (3 modes x 2 sin x 2 yarn
+        # x 2 dtype).  Variants that do not specialise these axes (GELU/SiLU,
+        # RMSNorm) keep the pre-B.2 "<dtype>_<arch>" filename to preserve
+        # byte-compat with the existing committed launchers.
+        if "SIN_SIGN" in self.specialise or "YA_ON" in self.specialise:
+            sin  = "fwd"     if int(self.specialise["SIN_SIGN"]) > 0 else "bwd"
+            yarn = "yarnon"  if int(self.specialise["YA_ON"])    != 0 else "yarnoff"
+            return f"{sin}_{yarn}_{self.dtype}_{self.arch}"
         return f"{self.dtype}_{self.arch}"
 
 
