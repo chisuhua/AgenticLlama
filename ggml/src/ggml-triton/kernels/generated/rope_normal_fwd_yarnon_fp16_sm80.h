@@ -19,7 +19,8 @@ float       attn_factor,
 float       beta_fast,
 float       beta_slow,
 float       corr_low,
-float       corr_high);
+float       corr_high,
+int32_t     rows);
 
         #ifdef __cplusplus
         }

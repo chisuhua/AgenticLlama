@@ -171,6 +171,7 @@ static bool triton_rope_normal_fp16_execute(
     const float   beta_fast  = rope_beta_fast(node);
     const float   beta_slow  = rope_beta_slow(node);
     const bool    ya_on      = rope_ya_on(node);
+    const int32_t rows = (int32_t)(src0->ne[1] * src0->ne[2] * src0->ne[3]);
 
     float corr_low = 0.0f, corr_high = 0.0f;
     if (ya_on) rope_compute_corr_dims(node, corr_low, corr_high);
@@ -183,21 +184,21 @@ static bool triton_rope_normal_fp16_execute(
             ? triton_launch_rope_normal_bwd_yarnon_fp16_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor,
-                  beta_fast, beta_slow, corr_low, corr_high)
+                  beta_fast, beta_slow, corr_low, corr_high, rows)
             : triton_launch_rope_normal_bwd_yarnoff_fp16_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor,
-                  beta_fast, beta_slow, 0.0f, 0.0f);
+                  beta_fast, beta_slow, 0.0f, 0.0f, rows);
     } else {
         rc = ya_on
             ? triton_launch_rope_normal_fwd_yarnon_fp16_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor,
-                  beta_fast, beta_slow, corr_low, corr_high)
+                  beta_fast, beta_slow, corr_low, corr_high, rows)
             : triton_launch_rope_normal_fwd_yarnoff_fp16_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor,
-                  beta_fast, beta_slow, 0.0f, 0.0f);
+                  beta_fast, beta_slow, 0.0f, 0.0f, rows);
     }
     return rc == 0;
 }
@@ -229,6 +230,7 @@ static bool triton_rope_normal_fp32_execute(
     const float   beta_fast  = rope_beta_fast(node);
     const float   beta_slow  = rope_beta_slow(node);
     const bool    ya_on      = rope_ya_on(node);
+    const int32_t rows = (int32_t)(src0->ne[1] * src0->ne[2] * src0->ne[3]);
     float corr_low = 0.0f, corr_high = 0.0f;
     if (ya_on) rope_compute_corr_dims(node, corr_low, corr_high);
     const bool is_backward = (node->op == GGML_OP_ROPE_BACK);
@@ -238,21 +240,21 @@ static bool triton_rope_normal_fp32_execute(
             ? triton_launch_rope_normal_bwd_yarnon_fp32_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor,
-                  beta_fast, beta_slow, corr_low, corr_high)
+                  beta_fast, beta_slow, corr_low, corr_high, rows)
             : triton_launch_rope_normal_bwd_yarnoff_fp32_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor,
-                  beta_fast, beta_slow, 0.0f, 0.0f);
+                  beta_fast, beta_slow, 0.0f, 0.0f, rows);
     } else {
         rc = ya_on
             ? triton_launch_rope_normal_fwd_yarnon_fp32_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor,
-                  beta_fast, beta_slow, corr_low, corr_high)
+                  beta_fast, beta_slow, corr_low, corr_high, rows)
             : triton_launch_rope_normal_fwd_yarnoff_fp32_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor,
-                  beta_fast, beta_slow, 0.0f, 0.0f);
+                  beta_fast, beta_slow, 0.0f, 0.0f, rows);
     }
     return rc == 0;
 }
@@ -283,6 +285,7 @@ static bool triton_rope_neox_fp16_execute(
     const float   beta_fast  = rope_beta_fast(node);
     const float   beta_slow  = rope_beta_slow(node);
     const bool    ya_on      = rope_ya_on(node);
+    const int32_t rows = (int32_t)(src0->ne[1] * src0->ne[2] * src0->ne[3]);
     float corr_low = 0.0f, corr_high = 0.0f;
     if (ya_on) rope_compute_corr_dims(node, corr_low, corr_high);
     const bool is_backward = (node->op == GGML_OP_ROPE_BACK);
@@ -292,21 +295,21 @@ static bool triton_rope_neox_fp16_execute(
             ? triton_launch_rope_neox_bwd_yarnon_fp16_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor,
-                  beta_fast, beta_slow, corr_low, corr_high)
+                  beta_fast, beta_slow, corr_low, corr_high, rows)
             : triton_launch_rope_neox_bwd_yarnoff_fp16_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor,
-                  beta_fast, beta_slow, 0.0f, 0.0f);
+                  beta_fast, beta_slow, 0.0f, 0.0f, rows);
     } else {
         rc = ya_on
             ? triton_launch_rope_neox_fwd_yarnon_fp16_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor,
-                  beta_fast, beta_slow, corr_low, corr_high)
+                  beta_fast, beta_slow, corr_low, corr_high, rows)
             : triton_launch_rope_neox_fwd_yarnoff_fp16_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor,
-                  beta_fast, beta_slow, 0.0f, 0.0f);
+                  beta_fast, beta_slow, 0.0f, 0.0f, rows);
     }
     return rc == 0;
 }
@@ -337,6 +340,7 @@ static bool triton_rope_neox_fp32_execute(
     const float   beta_fast  = rope_beta_fast(node);
     const float   beta_slow  = rope_beta_slow(node);
     const bool    ya_on      = rope_ya_on(node);
+    const int32_t rows = (int32_t)(src0->ne[1] * src0->ne[2] * src0->ne[3]);
     float corr_low = 0.0f, corr_high = 0.0f;
     if (ya_on) rope_compute_corr_dims(node, corr_low, corr_high);
     const bool is_backward = (node->op == GGML_OP_ROPE_BACK);
@@ -346,21 +350,21 @@ static bool triton_rope_neox_fp32_execute(
             ? triton_launch_rope_neox_bwd_yarnon_fp32_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor,
-                  beta_fast, beta_slow, corr_low, corr_high)
+                  beta_fast, beta_slow, corr_low, corr_high, rows)
             : triton_launch_rope_neox_bwd_yarnoff_fp32_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor,
-                  beta_fast, beta_slow, 0.0f, 0.0f);
+                  beta_fast, beta_slow, 0.0f, 0.0f, rows);
     } else {
         rc = ya_on
             ? triton_launch_rope_neox_fwd_yarnon_fp32_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor,
-                  beta_fast, beta_slow, corr_low, corr_high)
+                  beta_fast, beta_slow, corr_low, corr_high, rows)
             : triton_launch_rope_neox_fwd_yarnoff_fp32_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor,
-                  beta_fast, beta_slow, 0.0f, 0.0f);
+                  beta_fast, beta_slow, 0.0f, 0.0f, rows);
     }
     return rc == 0;
 }
@@ -407,6 +411,7 @@ static bool triton_rope_mrope_fp16_execute(
     const int32_t sect_w     = rope_sect(node, 2);
     const int32_t sect_e     = rope_sect(node, 3);
     const bool    ya_on      = rope_ya_on(node);
+    const int32_t rows = (int32_t)(src0->ne[1] * src0->ne[2] * src0->ne[3]);
     float corr_low = 0.0f, corr_high = 0.0f;
     if (ya_on) rope_compute_corr_dims(node, corr_low, corr_high);
     const bool is_backward = (node->op == GGML_OP_ROPE_BACK);
@@ -417,24 +422,24 @@ static bool triton_rope_mrope_fp16_execute(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   freq_factors_ptr, n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor,
                   attn_factor, beta_fast, beta_slow,
-                  sect_t, sect_h, sect_w, sect_e, corr_low, corr_high)
+                  sect_t, sect_h, sect_w, sect_e, corr_low, corr_high, rows)
             : triton_launch_rope_mrope_bwd_yarnoff_fp16_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   freq_factors_ptr, n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor,
                   attn_factor, beta_fast, beta_slow,
-                  sect_t, sect_h, sect_w, sect_e, 0.0f, 0.0f);
+                  sect_t, sect_h, sect_w, sect_e, 0.0f, 0.0f, rows);
     } else {
         rc = ya_on
             ? triton_launch_rope_mrope_fwd_yarnon_fp16_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   freq_factors_ptr, n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor,
                   attn_factor, beta_fast, beta_slow,
-                  sect_t, sect_h, sect_w, sect_e, corr_low, corr_high)
+                  sect_t, sect_h, sect_w, sect_e, corr_low, corr_high, rows)
             : triton_launch_rope_mrope_fwd_yarnoff_fp16_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   freq_factors_ptr, n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor,
                   attn_factor, beta_fast, beta_slow,
-                  sect_t, sect_h, sect_w, sect_e, 0.0f, 0.0f);
+                  sect_t, sect_h, sect_w, sect_e, 0.0f, 0.0f, rows);
     }
     return rc == 0;
 }
@@ -476,6 +481,7 @@ static bool triton_rope_mrope_fp32_execute(
     const int32_t sect_w     = rope_sect(node, 2);
     const int32_t sect_e     = rope_sect(node, 3);
     const bool    ya_on      = rope_ya_on(node);
+    const int32_t rows = (int32_t)(src0->ne[1] * src0->ne[2] * src0->ne[3]);
     float corr_low = 0.0f, corr_high = 0.0f;
     if (ya_on) rope_compute_corr_dims(node, corr_low, corr_high);
     const bool is_backward = (node->op == GGML_OP_ROPE_BACK);
@@ -486,24 +492,24 @@ static bool triton_rope_mrope_fp32_execute(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   freq_factors_ptr, n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor,
                   attn_factor, beta_fast, beta_slow,
-                  sect_t, sect_h, sect_w, sect_e, corr_low, corr_high)
+                  sect_t, sect_h, sect_w, sect_e, corr_low, corr_high, rows)
             : triton_launch_rope_mrope_bwd_yarnoff_fp32_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   freq_factors_ptr, n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor,
                   attn_factor, beta_fast, beta_slow,
-                  sect_t, sect_h, sect_w, sect_e, 0.0f, 0.0f);
+                  sect_t, sect_h, sect_w, sect_e, 0.0f, 0.0f, rows);
     } else {
         rc = ya_on
             ? triton_launch_rope_mrope_fwd_yarnon_fp32_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   freq_factors_ptr, n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor,
                   attn_factor, beta_fast, beta_slow,
-                  sect_t, sect_h, sect_w, sect_e, corr_low, corr_high)
+                  sect_t, sect_h, sect_w, sect_e, corr_low, corr_high, rows)
             : triton_launch_rope_mrope_fwd_yarnoff_fp32_sm80(
                   ctx->cu_stream, (CUdeviceptr)src0->data, (CUdeviceptr)src1->data,
                   freq_factors_ptr, n_dims, n_ctx_orig, freq_base, freq_scale, ext_factor,
                   attn_factor, beta_fast, beta_slow,
-                  sect_t, sect_h, sect_w, sect_e, 0.0f, 0.0f);
+                  sect_t, sect_h, sect_w, sect_e, 0.0f, 0.0f, rows);
     }
     return rc == 0;
 }

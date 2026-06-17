@@ -47,14 +47,15 @@ int32_t     sect_h,
 int32_t     sect_w,
 int32_t     sect_e,
 float       corr_low,
-float       corr_high) {
+float       corr_high,
+int32_t     rows) {
             if (load_module_once() != 0) {
                 return -1;
             }
 
-            void * args[] = { (void *) &a, (void *) &b, (void *) &freq_factors, (void *) &n_dims, (void *) &n_ctx_orig, (void *) &freq_base, (void *) &freq_scale, (void *) &ext_factor, (void *) &attn_factor, (void *) &beta_fast, (void *) &beta_slow, (void *) &sect_t, (void *) &sect_h, (void *) &sect_w, (void *) &sect_e, (void *) &corr_low, (void *) &corr_high };
+            void * args[] = { (void *) &a, (void *) &b, (void *) &freq_factors, (void *) &n_dims, (void *) &n_ctx_orig, (void *) &freq_base, (void *) &freq_scale, (void *) &ext_factor, (void *) &attn_factor, (void *) &beta_fast, (void *) &beta_slow, (void *) &sect_t, (void *) &sect_h, (void *) &sect_w, (void *) &sect_e, (void *) &corr_low, (void *) &corr_high, (void *) &rows };
             const int block = kTritonBlockSize_rope_mrope_bwd_yarnon_fp32_sm80;
-            const int grid  = (int)((N + block - 1) / block);
+            const int grid  = (int)((rows + block - 1) / block);
 
             CUresult r = cuLaunchKernel(g_function,
                                         grid, 1, 1,

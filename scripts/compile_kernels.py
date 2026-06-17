@@ -257,84 +257,117 @@ _PLACEHOLDER_CUBIN = bytes([
 
 # Per-kernel launcher-arg layout.  The emitter uses the value to pick the
 # header signature, the function-body parameter list, and the args[] array.
-# Each shape is a list of (c_type, c_name) pairs in source order (after
-# CUstream stream).  GELU/SILU use "default" — the unchanged elementwise
-# (in, out, N) ABI that pre-existed PR #1.
+# Each shape is a dict with two keys:
+#   * "params":     list of (c_type, c_name) pairs in source order
+#                   (after the CUstream stream parameter that
+#                   _format_params_lines prepends).
+#   * "grid_param": name of the param used in the grid-size calculation
+#                   "(grid = (param + block - 1) / block)".  Elementwise
+#                   and RMSNorm use "N" (one program per element-block);
+#                   RoPE uses "rows" (one program per row, where each
+#                   program processes a full n_dims vector).
+#
+# GELU/SILU use "default" — the unchanged elementwise (in, out, N) ABI
+# that pre-existed PR #1.
 LAUNCHER_SHAPES = {
-    "default": [
-        ("CUdeviceptr", "d_in"),
-        ("CUdeviceptr", "d_out"),
-        ("int32_t",     "N"),
-    ],
+    "default": {
+        "params": [
+            ("CUdeviceptr", "d_in"),
+            ("CUdeviceptr", "d_out"),
+            ("int32_t",     "N"),
+        ],
+        "grid_param": "N",
+    },
     # B.1 RMSNorm unweighted: y = x * rsqrt(mean(x*x) + eps)
-    "rms_norm_unweighted": [
-        ("CUdeviceptr", "d_x"),
-        ("CUdeviceptr", "d_y"),
-        ("int32_t",     "N"),
-    ],
+    "rms_norm_unweighted": {
+        "params": [
+            ("CUdeviceptr", "d_x"),
+            ("CUdeviceptr", "d_y"),
+            ("int32_t",     "N"),
+        ],
+        "grid_param": "N",
+    },
     # B.1 RMSNorm weighted: y = x * rsqrt(mean(x*x) + eps) * w
-    "rms_norm_weighted": [
-        ("CUdeviceptr", "d_x"),
-        ("CUdeviceptr", "d_w"),
-        ("CUdeviceptr", "d_y"),
-        ("int32_t",     "N"),
-    ],
+    "rms_norm_weighted": {
+        "params": [
+            ("CUdeviceptr", "d_x"),
+            ("CUdeviceptr", "d_w"),
+            ("CUdeviceptr", "d_y"),
+            ("int32_t",     "N"),
+        ],
+        "grid_param": "N",
+    },
     # B.2 RoPE shapes.  Per-mode ABI (counted after the stream param that
-    # _format_params_lines prepends):
-    #   rope_normal/rope_neox: 2 ptrs (a, b) + 10 scalar args (n_dims,
-    #                            n_ctx_orig, 6 YaRN floats, 2 corr_dims)
-    #                            = 12 args after stream
-    #   rope_mrope:             3 ptrs (a, b, freq_factors) + 14 scalar args
-    #                            (n_dims, n_ctx_orig, 6 YaRN floats, 4 MROPE
-    #                            sect ints, 2 corr_dims) = 17 args after stream
-    #   See commit b815d418b — earlier draft had 18 (off-by-one), corrected to 17.
-    "rope_normal": [
-        ("CUdeviceptr", "a"),
-        ("CUdeviceptr", "b"),
-        ("int32_t",     "n_dims"),
-        ("int32_t",     "n_ctx_orig"),
-        ("float",       "freq_base"),
-        ("float",       "freq_scale"),
-        ("float",       "ext_factor"),
-        ("float",       "attn_factor"),
-        ("float",       "beta_fast"),
-        ("float",       "beta_slow"),
-        ("float",       "corr_low"),
-        ("float",       "corr_high"),
-    ],
-    "rope_neox": [
-        ("CUdeviceptr", "a"),
-        ("CUdeviceptr", "b"),
-        ("int32_t",     "n_dims"),
-        ("int32_t",     "n_ctx_orig"),
-        ("float",       "freq_base"),
-        ("float",       "freq_scale"),
-        ("float",       "ext_factor"),
-        ("float",       "attn_factor"),
-        ("float",       "beta_fast"),
-        ("float",       "beta_slow"),
-        ("float",       "corr_low"),
-        ("float",       "corr_high"),
-    ],
-    "rope_mrope": [
-        ("CUdeviceptr", "a"),
-        ("CUdeviceptr", "b"),
-        ("CUdeviceptr", "freq_factors"),
-        ("int32_t",     "n_dims"),
-        ("int32_t",     "n_ctx_orig"),
-        ("float",       "freq_base"),
-        ("float",       "freq_scale"),
-        ("float",       "ext_factor"),
-        ("float",       "attn_factor"),
-        ("float",       "beta_fast"),
-        ("float",       "beta_slow"),
-        ("int32_t",     "sect_t"),
-        ("int32_t",     "sect_h"),
-        ("int32_t",     "sect_w"),
-        ("int32_t",     "sect_e"),
-        ("float",       "corr_low"),
-        ("float",       "corr_high"),
-    ],
+    # _format_params_lines prepends), and a trailing "rows" runtime arg
+    # (the number of rows in the input tensor = ne[1]*ne[2]*ne[3]):
+    #   rope_normal/rope_neox: 2 ptrs + 10 scalar args + 1 rows = 13 args
+    #   rope_mrope:             3 ptrs + 14 scalar args + 1 rows = 18 args
+    # The C++ provider passes `rows = src0->ne[1]*src0->ne[2]*src0->ne[3]`
+    # as the last arg; the grid is then `(rows + block - 1) / block`,
+    # i.e. one Triton program per row.
+    # See commit b815d418b — earlier draft had 18 runtime args
+    # (off-by-one), corrected to 17; this revision adds 1 (the rows
+    # arg) on top, taking rope_normal/rope_neox to 13 and rope_mrope
+    # to 18 runtime args.
+    "rope_normal": {
+        "params": [
+            ("CUdeviceptr", "a"),
+            ("CUdeviceptr", "b"),
+            ("int32_t",     "n_dims"),
+            ("int32_t",     "n_ctx_orig"),
+            ("float",       "freq_base"),
+            ("float",       "freq_scale"),
+            ("float",       "ext_factor"),
+            ("float",       "attn_factor"),
+            ("float",       "beta_fast"),
+            ("float",       "beta_slow"),
+            ("float",       "corr_low"),
+            ("float",       "corr_high"),
+            ("int32_t",     "rows"),
+        ],
+        "grid_param": "rows",
+    },
+    "rope_neox": {
+        "params": [
+            ("CUdeviceptr", "a"),
+            ("CUdeviceptr", "b"),
+            ("int32_t",     "n_dims"),
+            ("int32_t",     "n_ctx_orig"),
+            ("float",       "freq_base"),
+            ("float",       "freq_scale"),
+            ("float",       "ext_factor"),
+            ("float",       "attn_factor"),
+            ("float",       "beta_fast"),
+            ("float",       "beta_slow"),
+            ("float",       "corr_low"),
+            ("float",       "corr_high"),
+            ("int32_t",     "rows"),
+        ],
+        "grid_param": "rows",
+    },
+    "rope_mrope": {
+        "params": [
+            ("CUdeviceptr", "a"),
+            ("CUdeviceptr", "b"),
+            ("CUdeviceptr", "freq_factors"),
+            ("int32_t",     "n_dims"),
+            ("int32_t",     "n_ctx_orig"),
+            ("float",       "freq_base"),
+            ("float",       "freq_scale"),
+            ("float",       "ext_factor"),
+            ("float",       "attn_factor"),
+            ("float",       "beta_fast"),
+            ("float",       "beta_slow"),
+            ("int32_t",     "sect_t"),
+            ("int32_t",     "sect_h"),
+            ("int32_t",     "sect_w"),
+            ("int32_t",     "sect_e"),
+            ("float",       "corr_low"),
+            ("float",       "corr_high"),
+            ("int32_t",     "rows"),
+        ],
+        "grid_param": "rows",
+    },
 }
 
 
@@ -347,13 +380,13 @@ def _format_params_lines(shape, include_cu_stream: bool = True) -> str:
     lines = []
     if include_cu_stream:
         lines.append("CUstream    stream")
-    for c_type, c_name in shape:
+    for c_type, c_name in shape["params"]:
         lines.append(f"{c_type:11s} {c_name}")
     return ",\n    ".join(lines)
 
 
 def _format_arg_addrs(shape) -> str:
-    return ", ".join(f"(void *) &{c_name}" for _c_type, c_name in shape)
+    return ", ".join(f"(void *) &{c_name}" for _c_type, c_name in shape["params"])
 
 
 def _format_byte_array(blob: bytes, indent: str = "    ", per_line: int = 12) -> str:
@@ -461,7 +494,7 @@ def _emit_source(out_dir: Path, kernel: Kernel, variant: Variant,
 
                 void * args[] = {{ {arg_addrs} }};
                 const int block = kTritonBlockSize_{name};
-                const int grid  = (int)((N + block - 1) / block);
+                const int grid  = (int)(({shape["grid_param"]} + block - 1) / block);
 
                 CUresult r = cuLaunchKernel(g_function,
                                             grid, 1, 1,

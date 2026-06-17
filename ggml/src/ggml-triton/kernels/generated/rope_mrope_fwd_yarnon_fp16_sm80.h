@@ -24,7 +24,8 @@ int32_t     sect_h,
 int32_t     sect_w,
 int32_t     sect_e,
 float       corr_low,
-float       corr_high);
+float       corr_high,
+int32_t     rows);
 
         #ifdef __cplusplus
         }
