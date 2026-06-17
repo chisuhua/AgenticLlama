@@ -4,6 +4,171 @@
   "default_num_warps": 4,
   "kernels": [
     {
+      "name": "rope_normal",
+      "module": "triton_kernels.rope",
+      "function": "rope_kernel",
+      "variants": [
+        {
+          "dtype": "fp16",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 0, "SIN_SIGN": 1, "YA_ON": 0, "USE_WEIGHT": 0 },
+          "signature": "*fp16,*fp16,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,128,0,1,0,0"
+        },
+        {
+          "dtype": "fp16",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 0, "SIN_SIGN": 1, "YA_ON": 1, "USE_WEIGHT": 0 },
+          "signature": "*fp16,*fp16,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,128,0,1,0,1"
+        },
+        {
+          "dtype": "fp16",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 0, "SIN_SIGN": -1, "YA_ON": 0, "USE_WEIGHT": 0 },
+          "signature": "*fp16,*fp16,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,128,0,-1,0,0"
+        },
+        {
+          "dtype": "fp16",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 0, "SIN_SIGN": -1, "YA_ON": 1, "USE_WEIGHT": 0 },
+          "signature": "*fp16,*fp16,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,128,0,-1,0,1"
+        },
+        {
+          "dtype": "fp32",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 0, "SIN_SIGN": 1, "YA_ON": 0, "USE_WEIGHT": 0 },
+          "signature": "*fp32,*fp32,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,128,0,1,0,0"
+        },
+        {
+          "dtype": "fp32",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 0, "SIN_SIGN": 1, "YA_ON": 1, "USE_WEIGHT": 0 },
+          "signature": "*fp32,*fp32,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,128,0,1,0,1"
+        },
+        {
+          "dtype": "fp32",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 0, "SIN_SIGN": -1, "YA_ON": 0, "USE_WEIGHT": 0 },
+          "signature": "*fp32,*fp32,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,128,0,-1,0,0"
+        },
+        {
+          "dtype": "fp32",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 0, "SIN_SIGN": -1, "YA_ON": 1, "USE_WEIGHT": 0 },
+          "signature": "*fp32,*fp32,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,128,0,-1,0,1"
+        }
+      ]
+    },
+    {
+      "name": "rope_neox",
+      "module": "triton_kernels.rope",
+      "function": "rope_kernel",
+      "variants": [
+        {
+          "dtype": "fp16",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 2, "SIN_SIGN": 1, "YA_ON": 0, "USE_WEIGHT": 0 },
+          "signature": "*fp16,*fp16,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,128,2,1,0,0"
+        },
+        {
+          "dtype": "fp16",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 2, "SIN_SIGN": 1, "YA_ON": 1, "USE_WEIGHT": 0 },
+          "signature": "*fp16,*fp16,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,128,2,1,0,1"
+        },
+        {
+          "dtype": "fp16",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 2, "SIN_SIGN": -1, "YA_ON": 0, "USE_WEIGHT": 0 },
+          "signature": "*fp16,*fp16,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,128,2,-1,0,0"
+        },
+        {
+          "dtype": "fp16",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 2, "SIN_SIGN": -1, "YA_ON": 1, "USE_WEIGHT": 0 },
+          "signature": "*fp16,*fp16,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,128,2,-1,0,1"
+        },
+        {
+          "dtype": "fp32",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 2, "SIN_SIGN": 1, "YA_ON": 0, "USE_WEIGHT": 0 },
+          "signature": "*fp32,*fp32,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,128,2,1,0,0"
+        },
+        {
+          "dtype": "fp32",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 2, "SIN_SIGN": 1, "YA_ON": 1, "USE_WEIGHT": 0 },
+          "signature": "*fp32,*fp32,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,128,2,1,0,1"
+        },
+        {
+          "dtype": "fp32",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 2, "SIN_SIGN": -1, "YA_ON": 0, "USE_WEIGHT": 0 },
+          "signature": "*fp32,*fp32,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,128,2,-1,0,0"
+        },
+        {
+          "dtype": "fp32",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 2, "SIN_SIGN": -1, "YA_ON": 1, "USE_WEIGHT": 0 },
+          "signature": "*fp32,*fp32,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,128,2,-1,0,1"
+        }
+      ]
+    },
+    {
+      "name": "rope_mrope",
+      "module": "triton_kernels.rope",
+      "function": "rope_kernel",
+      "variants": [
+        {
+          "dtype": "fp16",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 8, "SIN_SIGN": 1, "YA_ON": 0, "USE_WEIGHT": 0 },
+          "signature": "*fp16,*fp16,*fp16,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,i32,i32,i32,i32,fp32,fp32,128,8,1,0,0"
+        },
+        {
+          "dtype": "fp16",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 8, "SIN_SIGN": 1, "YA_ON": 1, "USE_WEIGHT": 0 },
+          "signature": "*fp16,*fp16,*fp16,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,i32,i32,i32,i32,fp32,fp32,128,8,1,0,1"
+        },
+        {
+          "dtype": "fp16",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 8, "SIN_SIGN": -1, "YA_ON": 0, "USE_WEIGHT": 0 },
+          "signature": "*fp16,*fp16,*fp16,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,i32,i32,i32,i32,fp32,fp32,128,8,-1,0,0"
+        },
+        {
+          "dtype": "fp16",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 8, "SIN_SIGN": -1, "YA_ON": 1, "USE_WEIGHT": 0 },
+          "signature": "*fp16,*fp16,*fp16,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,i32,i32,i32,i32,fp32,fp32,128,8,-1,0,1"
+        },
+        {
+          "dtype": "fp32",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 8, "SIN_SIGN": 1, "YA_ON": 0, "USE_WEIGHT": 0 },
+          "signature": "*fp32,*fp32,*fp32,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,i32,i32,i32,i32,fp32,fp32,128,8,1,0,0"
+        },
+        {
+          "dtype": "fp32",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 8, "SIN_SIGN": 1, "YA_ON": 1, "USE_WEIGHT": 0 },
+          "signature": "*fp32,*fp32,*fp32,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,i32,i32,i32,i32,fp32,fp32,128,8,1,0,1"
+        },
+        {
+          "dtype": "fp32",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 8, "SIN_SIGN": -1, "YA_ON": 0, "USE_WEIGHT": 0 },
+          "signature": "*fp32,*fp32,*fp32,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,i32,i32,i32,i32,fp32,fp32,128,8,-1,0,0"
+        },
+        {
+          "dtype": "fp32",
+          "arch": "sm80",
+          "specialise": { "BLOCK_SIZE": 128, "EPS": 1.0e-6, "MODE": 8, "SIN_SIGN": -1, "YA_ON": 1, "USE_WEIGHT": 0 },
+          "signature": "*fp32,*fp32,*fp32,i32,i32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,fp32,i32,i32,i32,i32,fp32,fp32,128,8,-1,0,1"
+        }
+      ]
+    },
+    {
       "name": "rms_norm_unweighted",
       "module": "triton_kernels.rms_norm",
       "function": "rms_norm_kernel",
