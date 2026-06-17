@@ -7,6 +7,10 @@
 #include "ggml-triton-provider-rmsnorm.h"
 #endif
 
+#ifdef GGML_TRITON_HAS_ROPE
+#include "ggml-triton-provider-rope.h"
+#endif
+
 #ifdef GGML_TRITON_HAS_CUTLASS
 #include "ggml-triton-provider-cutlass.h"
 #endif
@@ -425,6 +429,9 @@ ggml_backend_t ggml_backend_triton_init(int device) {
 #ifdef GGML_TRITON_HAS_RMSNORM
     ggml_triton_register_rmsnorm_providers(ctx->op_registry);
 #endif
+#ifdef GGML_TRITON_HAS_ROPE
+    ggml_triton_register_rope_providers(ctx->op_registry);
+#endif
 #ifdef GGML_TRITON_HAS_CUTLASS
     ggml_triton_register_cutlass_providers(ctx->op_registry);
 #endif
@@ -481,6 +488,9 @@ ggml_backend_t ggml_backend_triton_init(int device) {
     ggml_triton_register_builtin_providers(ctx->op_registry);
 #ifdef GGML_TRITON_HAS_RMSNORM
     ggml_triton_register_rmsnorm_providers(ctx->op_registry);
+#endif
+#ifdef GGML_TRITON_HAS_ROPE
+    ggml_triton_register_rope_providers(ctx->op_registry);
 #endif
 #ifdef GGML_TRITON_HAS_CUTLASS
     ggml_triton_register_cutlass_providers(ctx->op_registry);
