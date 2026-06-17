@@ -116,6 +116,40 @@ int main() {
     }
     std::printf("Assert 4 passed: triton AOT RMS_NORM fp16 + fp32 providers are registered\n");
 
+    // Assert 5 (B.2): the Triton AOT RoPE provider (3 modes x 2 dtypes = 6
+    // impls) must be registered for GGML_OP_ROPE. Mirrors B.1's Assert 4
+    // pattern. The CPU fp32 RoPE provider already exists
+    // (see ggml-triton-provider-cpu.cpp:793-800 — only NORMAL mode) but we are
+    // specifically asserting that the *triton AOT* entries (NORMAL, NEOX,
+    // MROPE x fp16/fp32) get added by the new
+    // ggml-triton-provider-rope.{h,cpp} files (Task 8).
+    constexpr const char * expected_rope[] = {
+        "triton_rope_normal_fp16_sm80",
+        "triton_rope_normal_fp32_sm80",
+        "triton_rope_neox_fp16_sm80",
+        "triton_rope_neox_fp32_sm80",
+        "triton_rope_mrope_fp16_sm80",
+        "triton_rope_mrope_fp32_sm80",
+    };
+    bool found_rope[6] = {false, false, false, false, false, false};
+    if (auto * impls = reg.get_impls(GGML_OP_ROPE)) {
+        for (const auto & impl : *impls) {
+            if (impl.provider != GGML_TRITON_PROVIDER_TRITON) continue;
+            for (int i = 0; i < 6; ++i) {
+                if (std::string(impl.name).find(expected_rope[i]) != std::string::npos) {
+                    found_rope[i] = true;
+                }
+            }
+        }
+    }
+    for (int i = 0; i < 6; ++i) {
+        if (!found_rope[i]) {
+            std::fprintf(stderr, "FAIL: triton AOT RoPE impl %s not registered in global registry\n", expected_rope[i]);
+            return 6;
+        }
+    }
+    std::printf("Assert 5 passed: 6 triton AOT RoPE impls (NORMAL+NEOX+MROPE x fp16/fp32) registered\n");
+
     std::printf("OK: registry test passed\n");
     return 0;
 }
