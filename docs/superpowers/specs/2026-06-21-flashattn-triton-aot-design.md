@@ -887,3 +887,94 @@ EXIT=0
 | 2 | `cmake -B build-off -DGGML_TRITON=ON -DGGML_TRITON_WITH_FLASH_ATTN=OFF && cmake --build build-off --target test-triton-registry` | Build succeeds |
 | 2 | `./build-off/bin/test-triton-registry` | Exit 7 (Assert 6 fails, others pass) |
 | 3 | `./build/bin/test-backend-ops test -o FLASH_ATTN_EXT --backends CPU,TRITON` | Build succeeds (numeric check deferred) |
+
+
+---
+
+## 6. Stage 2 path & failure modes
+
+### 6.1 Stage 1 limitations (must document in plan + code comments)
+
+| Limitation | Impact | Stage 1 handling | Stage 2 fix |
+|---|---|---|---|
+| HEAD_DIM=96 vs 128 | Triton's `tl.dot` accepts 96 natively; no padding | Document inline; no fix | N/A |
+| Scratch allocation lazy | First decode call has alloc overhead; subsequent reuse | Acceptable (one-time) | Pre-allocate in `ggml_backend_triton_init` once max size known |
+| CPU reduce pass | `O(num_kv_chunks × HEAD_DIM)` per (head, batch); ~50K FLOPs for MiniMind-3 | Acceptable (< 1ms) | Triton-native reduce kernel (saves D2H transfer) |
+| Decode uses `q_pos=0` always | Assumes single-token decode | Acceptable; multi-token decode rare | Read `q_pos` from `op->src[1]` (positions tensor) |
+| Pre-compiled at BLOCK_Q=128, BLOCK_KV=64 | Fixed block sizes; sub-128 head_dim wastes 25% compute | Acceptable | Add `BLOCK_Q=64` constexpr for head_dim=64 variants |
+| `causal_mask = -inf` hardcoded | Cannot support additive mask (ALiBi) | Acceptable for MiniMind-3 | Add `ALIBI_SLOPE` constexpr + mask tensor handling |
+| decode doesn't handle `num_kv_chunks=0` | Empty KV sequence (S=0) | `supports()` requires `nek1 >= 1`; safe | N/A |
+
+### 6.2 Failure modes (for test-pyramid.md "Known failure modes" section)
+
+| ID | Failure mode | Detection | Recovery |
+|---|---|---|---|
+| F1 | `cuMemAlloc` fails (scratch too big) | `ensure_decode_scratch` returns -1 | `execute()` returns false → CPU fallback |
+| F2 | `cuMemcpyDtoHAsync` fails | Return code from CUDA API | `execute()` returns false → CPU fallback |
+| F3 | Decode kernel returns non-zero (load_module failed in AOT) | `triton_launch_*` returns -1 | `execute()` returns false → CPU fallback |
+| F4 | `num_kv_chunks` overflow (nek1 too large) | Pre-launch check in `execute()` | Return false → CPU fallback |
+| F5 | HEAD_DIM not in {64, 96, 128} | `supports()` returns false | Dispatch to CPU provider |
+| F6 | n_heads × batch > 32 | `supports()` returns false | Dispatch to CPU provider |
+| F7 | Mask tensor non-null (`src[3] != nullptr`) | `supports()` returns false | Dispatch to CPU provider |
+| F8 | Non-contiguous Q/K/V | `supports()` returns false | Dispatch to CPU provider |
+| F9 | GQA (neq2 != nek2) | `supports()` returns false | Dispatch to CPU provider |
+| F10 | `dst` non-fp32 (per `ops.cpp:8883`) | `supports()` checks `nb0 == sizeof(float)` | Dispatch to CPU provider |
+| F11 | Wrong number of constexprs in registry signature | Build fails (`_parse_signature` length check) | Fix registry entry |
+| F12 | AOT compile fails (e.g., triton.compile error, mrope-style `list index out of range`) | Script logs error, falls back to placeholder CUBIN | Build succeeds (placeholder works); debug on GPU host |
+| F13 | CPU reduce race with kernel | Mitigated by `cuStreamSynchronize` barrier | N/A (handled in §4.4) |
+
+### 6.3 Stage 2 deferred items (consolidated from §2.D + new)
+
+| Item | Source | Estimated effort |
+|---|---|---|
+| B.2 RoPE grid bug (functional, not latent) | §3.8 | Small (1 task, fix `LAUNCHER_SHAPES` + regen) |
+| B.1 RMSNorm `pid` bug (kernel has no `pid`) | §3.9 | Medium (3 tasks: add `pid` to kernel, add `num_blocks` arg, fix `LAUNCHER_SHAPES`) |
+| Custom mask tensor (`src[3] != nullptr` for ALiBi) | §2.D | Medium (kernel changes, `supports()` relaxed) |
+| `logit_softcap` (tanh squash) | §2.D | Medium (pre-mask transform) |
+| `sinks` tensor (`src[4]`) | §2.D | Small (add as bias to softmax) |
+| GQA/MQA (`neq2 != nek2`) | §2.D | Large (kernel needs broadcast, `supports()` relaxed) |
+| bf16 / quantized K/V | §2.D | Large (kernel needs bf16 ops, dispatch gates) |
+| Paged KV cache | §2.D | Large (new layout, page table indexing) |
+| `FLASH_ATTN_BACK` | §2.D | Large (separate kernel, full FA-2 backward) |
+| V head dim ≠ K head dim | §2.D | Small (separate `DV` constexpr) |
+| `n_heads > 32` | §2.D | Medium (kernel needs loop over head tile) |
+| Long-context (≥8K) optimizations | §2.D | Medium (FlashAttention-3 techniques) |
+| Decode `q_pos` from `op->src[1]` (positions tensor) | §6.1 | Small (read from tensor, pass to kernel) |
+| Triton-native reduce kernel for decode | §6.1 | Medium (3rd AOT kernel family, save D2H transfer) |
+| `compile_kernels.py` 3.7.0 API patch (real CUBIN on GPU host) | Phase 0 audit §0.4 | Medium (replace signature param with ASTSource + target + options) |
+
+### 6.4 Out-of-scope for B.3 (explicit, restated for clarity)
+
+- `GGML_OP_FLASH_ATTN_BACK` (backward) — see Q0 in spec header
+- Mask tensors where `dst->src[3] != nullptr` — see Q2
+- paged KV cache / custom stride layout — see Q6
+- bf16 / quantized K/V
+- KV head count != query head count (GQA/MQA)
+- `n_heads > 32`
+- Softcap (Gemma 2)
+- V head dim != K head dim
+- Real CUBIN on CPU-only host (Phase 0 audit §0.4)
+
+### 6.5 Spec self-review (post-Oracle fix passes)
+
+Per the brainstorming skill's self-review checklist:
+
+1. **Placeholder scan**: No "TBD", "TODO", "fix me later" patterns. Stage 1 simplifications are explicitly documented inline. ✓
+2. **Internal consistency**: §3.6 launcher names match §4.6 registry names. §3.6 sig token counts match §3.7 registry signatures. §4.4 execute() function names match §4.3 supports() names. §5.1 Assert 6 names match §4.6 register() names. ✓
+3. **Scope check**: Single subsystem (FlashAttn provider), 4 new files (3 + 1 header), 7 modified files, 12 generated files. Fits one implementation plan (estimated 15-17 tasks mirroring B.2's 15). ✓
+4. **Ambiguity check**:
+   - "rows" is explicitly defined as `neq2 × neq3` everywhere. ✓
+   - "q_pos" is explicitly `0` for decode (single-token). Documented as Stage 2 improvement. ✓
+   - "scale" is `1.0 / sqrt(HEAD_DIM)`, precomputed on host. ✓
+   - "scratch layout" is `[q_head × batch + batch_idx][chunk_idx][M, S, V_unnormalized]` (canonical, post-Oracle fix). ✓
+   - All 12 launcher names spelled out, all 12 sig token counts spelled out, all 12 registry names spelled out. ✓
+5. **No TBDs in the design**: All "Stage 2 deferred" items are clearly enumerated in §6.3 (not just "later"). ✓
+
+### 6.6 Open question (deferred to plan stage, not design)
+
+How does the provider's `register_impl` handle the **scratch state field** added to `ggml_backend_triton_context`? The plan will need a Task that:
+1. Adds 3 fields to `ggml_backend_triton_context` struct
+2. Initializes them to {0, nullptr, 0} in `ggml_backend_triton_init`
+3. Frees them in `ggml_backend_triton_free`
+
+The plan should treat this as a separate Task (B.1/B.2 didn't need this — first persistent per-call state in the Triton subsystem).
