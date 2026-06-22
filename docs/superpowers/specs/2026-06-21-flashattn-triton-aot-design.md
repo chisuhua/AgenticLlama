@@ -265,3 +265,234 @@ Provider's `supports()` returns true only when **all** conditions hold; otherwis
 | Anything else (mask!=nullptr, non-contiguous, head_dim ∉ {64,96,128}, n_heads > 32, GQA) | CPU fallback | `supports()` returns false |
 
 **Note**: `neq1 ∈ [1, BLOCK_Q)` is supported by both kernels (prefill handles via runtime mask; decode dispatches on `neq1 == 1` exactly).
+
+---
+
+## 3. AOT launcher ABI
+
+### 3.1 Triton DSL kernel signatures (host-binding)
+
+**Prefill**:
+```python
+@triton.jit
+def flash_attn_prefill_kernel(
+    q_ptr, k_ptr, v_ptr, dst_ptr,                          # 4 ptrs
+    neq1, neq2, neq3, nek1, S, n_heads, rows, num_q_blocks, # 8 int32
+    scale,                                                   # float
+    BLOCK_Q: tl.constexpr,                                   # 128
+    BLOCK_KV: tl.constexpr,                                  # 64
+    HEAD_DIM: tl.constexpr,                                  # {64, 96, 128}
+    DTYPE_ID: tl.constexpr,                                  # {0, 1}
+    CAUSAL: tl.constexpr,                                    # 1
+):
+```
+**13 runtime args after stream**. `num_q_blocks = cdiv(neq1, 128)` is pre-computed on host (decouples grid sizing from BLOCK_Q constexpr; lets the template use `grid_mode="exact"` without per-shape divisor).
+
+**Decode**:
+```python
+@triton.jit
+def flash_attn_decode_kernel(
+    q_ptr, k_ptr, v_ptr, dst_ptr, scratch_ptr,    # 5 ptrs
+    neq1, neq2, neq3, nek1, S, n_heads, q_pos,     # 7 int32
+    num_kv_chunks, rows,                          # 2 int32
+    scale,                                        # float
+    BLOCK_KV: tl.constexpr,                       # 64
+    HEAD_DIM: tl.constexpr,                       # {64, 96, 128}
+    DTYPE_ID: tl.constexpr,                       # {0, 1}
+    CAUSAL: tl.constexpr,                         # 1
+):
+```
+**15 runtime args after stream**. **4 constexpr** (no `BLOCK_Q` — decode processes 1 Q row per program; Q-tile size is irrelevant).
+
+### 3.2 AOT launcher C signatures
+
+| Kernel | launcher name | C signature (runtime args after stream) |
+|---|---|---|
+| prefill | `triton_launch_flash_attn_prefill_hd{HD}_fp{DT}_sm80` | `(stream, q, k, v, dst, neq1, neq2, neq3, nek1, S, n_heads, rows, num_q_blocks, scale)` — **13 args** |
+| decode | `triton_launch_flash_attn_decode_hd{HD}_fp{DT}_sm80` | `(stream, q, k, v, dst, scratch, neq1, neq2, neq3, nek1, S, n_heads, q_pos, num_kv_chunks, rows, scale)` — **15 args** |
+
+**Naming format**: use `fp16`/`fp32` (matches B.1/B.2 dtype strings, not `f16`/`f32` — keeps byte-compat with existing variant dtype keys).
+
+**12 launcher names** (3 head_dim × 2 dtype × 2 kernel):
+- `triton_launch_flash_attn_prefill_hd64_fp16_sm80` / `_fp32_sm80`
+- `triton_launch_flash_attn_prefill_hd96_fp16_sm80` / `_fp32_sm80`
+- `triton_launch_flash_attn_prefill_hd128_fp16_sm80` / `_fp32_sm80`
+- `triton_launch_flash_attn_decode_hd64_fp16_sm80` / `_fp32_sm80`
+- `triton_launch_flash_attn_decode_hd96_fp16_sm80` / `_fp32_sm80`
+- `triton_launch_flash_attn_decode_hd128_fp16_sm80` / `_fp32_sm80`
+
+Wait — re-check the decode launcher names. The 12 names should be:
+- prefill: 3 head_dim × 2 dtype = 6 names (`hd{64,96,128}_fp{16,32}_sm80`)
+- decode: 3 head_dim × 2 dtype = 6 names (`hd{64,96,128}_fp{16,32}_sm80`)
+
+Total 12, all unique. (The example 5-line block above has a typo — `fp32_fp32_sm80` should be `fp32_sm80`. Correcting in the actual file below.)
+
+**Corrected 12 launcher names**:
+```
+triton_launch_flash_attn_prefill_hd64_fp16_sm80
+triton_launch_flash_attn_prefill_hd64_fp32_sm80
+triton_launch_flash_attn_prefill_hd96_fp16_sm80
+triton_launch_flash_attn_prefill_hd96_fp32_sm80
+triton_launch_flash_attn_prefill_hd128_fp16_sm80
+triton_launch_flash_attn_prefill_hd128_fp32_sm80
+triton_launch_flash_attn_decode_hd64_fp16_sm80
+triton_launch_flash_attn_decode_hd64_fp32_sm80
+triton_launch_flash_attn_decode_hd96_fp16_sm80
+triton_launch_flash_attn_decode_hd96_fp32_sm80
+triton_launch_flash_attn_decode_hd128_fp16_sm80
+triton_launch_flash_attn_decode_hd128_fp32_sm80
+```
+
+### 3.3 `LAUNCHER_SHAPES` entries (extended schema: `grid_param_y`, `grid_mode_y`)
+
+Oracle §1 critical fix: grid must be 2D. Schema extended with `grid_param_y` / `grid_mode_y` (optional; absent → 1D launch, backward compatible with B.1/B.2 entries).
+
+**`grid_mode` semantics** (Oracle §5 fix):
+- Default: `shape.get("grid_mode", "divide")` (backward compat)
+- `"divide"`: `grid = (grid_param + divisor - 1) / divisor`, where `divisor = shape.get("grid_divisor", block)`. If `grid_divisor` is absent, falls back to `block` (= `kTritonBlockSize_{name}` from the launcher source).
+- `"exact"`: `grid = grid_param` (no division). `grid_divisor` is ignored.
+
+```python
+LAUNCHER_SHAPES = {
+    # ... existing entries unchanged (default, rms_norm_*, rope_*) — backward compat via grid_mode default ...
+    "flash_attn_prefill": {
+        "params": [
+            ("CUdeviceptr", "q"),
+            ("CUdeviceptr", "k"),
+            ("CUdeviceptr", "v"),
+            ("CUdeviceptr", "dst"),
+            ("int32_t",     "neq1"),
+            ("int32_t",     "neq2"),
+            ("int32_t",     "neq3"),
+            ("int32_t",     "nek1"),
+            ("int32_t",     "S"),
+            ("int32_t",     "n_heads"),
+            ("int32_t",     "rows"),
+            ("int32_t",     "num_q_blocks"),
+            ("float",       "scale"),
+        ],
+        "grid_param":   "num_q_blocks",
+        "grid_mode":    "exact",
+        "grid_param_y": "rows",
+        "grid_mode_y":  "exact",
+    },
+    "flash_attn_decode": {
+        "params": [
+            ("CUdeviceptr", "q"),
+            ("CUdeviceptr", "k"),
+            ("CUdeviceptr", "v"),
+            ("CUdeviceptr", "dst"),
+            ("CUdeviceptr", "scratch"),
+            ("int32_t",     "neq1"),
+            ("int32_t",     "neq2"),
+            ("int32_t",     "neq3"),
+            ("int32_t",     "nek1"),
+            ("int32_t",     "S"),
+            ("int32_t",     "n_heads"),
+            ("int32_t",     "q_pos"),
+            ("int32_t",     "num_kv_chunks"),
+            ("int32_t",     "rows"),
+            ("float",       "scale"),
+        ],
+        "grid_param":   "num_kv_chunks",
+        "grid_mode":    "exact",
+        "grid_param_y": "rows",
+        "grid_mode_y":  "exact",
+    },
+}
+```
+
+### 3.4 Template branch (in `_emit_source`)
+
+The launcher template branches on whether the shape has a Y-axis grid:
+
+```python
+if "grid_param_y" in shape:
+    grid_x_expr = _format_grid_expr(shape, axis="x")
+    grid_y_expr = _format_grid_expr(shape, axis="y")
+    cuLaunch_kernel = (
+        f"cuLaunchKernel(g_function, {grid_x_expr}, {grid_y_expr}, 1, "
+        f"block, 1, 1, 0, stream, args, NULL)"
+    )
+else:
+    # Existing 1D path (B.1/B.2 backward compat)
+    grid_expr = _format_grid_expr(shape, axis="x")
+    cuLaunch_kernel = (
+        f"cuLaunchKernel(g_function, {grid_expr}, 1, 1, block, 1, 1, 0, stream, args, NULL)"
+    )
+```
+
+`_format_grid_expr(shape, axis)` returns:
+- `axis="x"`: `f"({shape['grid_param']} + {divisor} - 1) / {divisor}"` if `grid_mode="divide"`, else `shape["grid_param"]`
+- `axis="y"`: same logic with `grid_param_y` / `grid_mode_y` (and `divisor` from `grid_divisor_y` if present, else same X divisor)
+
+### 3.5 `Variant.tag` extension (Oracle #2 fix)
+
+`compile_kernels.py:54-58` `Variant.tag` is extended to fold `HEAD_DIM` (and continues to fold `SIN_SIGN`/`YA_ON` for B.2 RoPE compatibility):
+
+```python
+@property
+def tag(self) -> str:
+    parts = []
+    if "HEAD_DIM" in self.specialise:
+        parts.append(f"hd{int(self.specialise['HEAD_DIM'])}")
+    if "SIN_SIGN" in self.specialise:
+        parts.append("fwd" if int(self.specialise["SIN_SIGN"]) > 0 else "bwd")
+    if "YA_ON" in self.specialise:
+        parts.append("yarnon" if int(self.specialise["YA_ON"]) != 0 else "yarnoff")
+    parts.append(self.dtype)
+    parts.append(self.arch)
+    return "_".join(parts)
+```
+
+Produced tag formats:
+- B.1 RMSNorm (no axes): `fp16_sm80` ✓ (unchanged)
+- B.2 RoPE (SIN_SIGN+YA_ON): `fwd_yarnoff_fp16_sm80` ✓ (unchanged)
+- **B.3 FlashAttn (HEAD_DIM only): `hd96_fp16_sm80`** ✓ (new; ensures 3 head_dim variants of same kernel/dtype don't collide)
+
+### 3.6 AOT variant matrix (12 entries)
+
+| kernel | HEAD_DIM | DTYPE | launcher name | sig token count |
+|---|---|---|---|---|
+| prefill | 64 | fp16 | `..._prefill_hd64_fp16_sm80` | 13 runtime + 5 constexpr = **18** |
+| prefill | 64 | fp32 | `..._prefill_hd64_fp32_sm80` | 18 |
+| prefill | 96 | fp16 | `..._prefill_hd96_fp16_sm80` | 18 |
+| prefill | 96 | fp32 | `..._prefill_hd96_fp32_sm80` | 18 |
+| prefill | 128 | fp16 | `..._prefill_hd128_fp16_sm80` | 18 |
+| prefill | 128 | fp32 | `..._prefill_hd128_fp32_sm80` | 18 |
+| decode | 64 | fp16 | `..._decode_hd64_fp16_sm80` | 15 runtime + **4** constexpr = **19** |
+| decode | 64 | fp32 | `..._decode_hd64_fp32_sm80` | 19 |
+| decode | 96 | fp16 | `..._decode_hd96_fp16_sm80` | 19 |
+| decode | 96 | fp32 | `..._decode_hd96_fp32_sm80` | 19 |
+| decode | 128 | fp16 | `..._decode_hd128_fp16_sm80` | 19 |
+| decode | 128 | fp32 | `..._decode_hd128_fp32_sm80` | 19 |
+
+(Oracle §3 fix: decode has 4 constexpr, not 5. Oracle §4 fix: decode has 15 runtime, not 14.)
+
+### 3.7 Registry signatures (per kernel_registry.json)
+
+Each variant's `signature` field:
+- **prefill** (5 constexpr: `BLOCK_Q=128, BLOCK_KV=64, HEAD_DIM, DTYPE_ID=0/1, CAUSAL=1`):
+  - `*fp16,*fp16,*fp16,*fp16,i32,i32,i32,i32,i32,i32,i32,i32,f32,128,64,64,0,1` (HD=64, fp16)
+  - `*fp16,*fp16,*fp16,*fp16,i32,i32,i32,i32,i32,i32,i32,i32,f32,128,64,96,0,1` (HD=96, fp16)
+  - `*fp16,*fp16,*fp16,*fp16,i32,i32,i32,i32,i32,i32,i32,i32,f32,128,64,128,0,1` (HD=128, fp16)
+  - (×2 for fp32: replace `*fp16` → `*fp32`, `DTYPE_ID` 0 → 1)
+- **decode** (4 constexpr: `BLOCK_KV=64, HEAD_DIM, DTYPE_ID=0/1, CAUSAL=1` — **no BLOCK_Q**):
+  - `*fp16,*fp16,*fp16,*fp16,*fp16,i32,i32,i32,i32,i32,i32,i32,i32,i32,f32,64,64,0,1` (HD=64, fp16)
+  - `*fp16,*fp16,*fp16,*fp16,*fp16,i32,i32,i32,i32,i32,i32,i32,i32,i32,f32,64,96,0,1` (HD=96, fp16)
+  - `*fp16,*fp16,*fp16,*fp16,*fp16,i32,i32,i32,i32,i32,i32,i32,i32,i32,f32,64,128,0,1` (HD=128, fp16)
+  - (×2 for fp32)
+
+### 3.8 B.2 RoPE bug: functional, not latent (Oracle LOW #6, info only)
+
+The B.2 RoPE `rope.py:48-49` does 1 row per program (`pid = program_id(0)`, load `a_ptr + pid * n_dims`). The current launcher grid = `(rows + 127) / 128`. For MiniMind-3 with `rows=8` (or any rows < 128), grid = 1 → only `pid=0` runs → rows 1-7 unrotated. **Functional bug** (not latent), triggered by any multi-row RoPE input reaching the kernel.
+
+**Stage 2 fix (not in B.3 scope)**: change B.2 `LAUNCHER_SHAPES["rope_normal"|"rope_neox"|"rope_mrope"]` from current (implicit `grid_mode="divide"`, `grid_param="rows"`, divisor 128) to explicit `grid_mode="exact"`, `grid_param="rows"`. Re-run `compile_kernels.py` to regenerate 24 B.2 .c files. Re-test B.2 (Assert 5 still passes; Stage 1 placeholder CUBIN unaffected).
+
+### 3.9 B.1 RMSNorm has a separate `pid` bug (Oracle LOW #6 addendum)
+
+**Distinct issue from B.2 RoPE** — do NOT conflate. RMSNorm's `grid_param="N"` (N = row length, e.g. 768) and `rms_norm.py:44` kernel does NOT use `pid` (`tl.load(x_ptr + offsets, ...)` always loads row 0). The grid computation `(N + 1023) / 1024` produces `grid=1` (for N=768) and the kernel always processes row 0. **Functional bug.**
+
+**Stage 2 audit needed**: B.1 RMSNorm requires adding `pid = tl.program_id(0)` to the kernel, plus `num_blocks` runtime arg (host-computed `cdiv(N, 1024)`), plus `grid_mode="exact"`. Larger fix than B.2 RoPE.
+
+**B.3 implication**: B.3 kernels use `pid = program_id(0)` and `program_id(1)` correctly from the start (Section 2 design), so B.3 is **immune to this bug class**. Only B.1/B.2 retro-fix needed in Stage 2.
