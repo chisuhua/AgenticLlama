@@ -107,6 +107,30 @@ if (GGML_TRITON)
             ggml-triton-provider-rope.cpp)
     endif()
 
+    # ------------------------------------------------------------------
+    # Optional: FlashAttn kernel provider (B.3, default ON)
+    # ------------------------------------------------------------------
+    if (NOT GGML_TRITON_CPU_ONLY)
+        option(GGML_TRITON_WITH_FLASH_ATTN "Enable FlashAttn kernels in Triton backend" ON)
+    endif()
+
+    if(GGML_TRITON_WITH_FLASH_ATTN)
+        list(APPEND GGML_TRITON_GPU_SRC
+            ${TRITON_GENERATED_DIR}/flash_attn_prefill_hd64_fp16_sm80.c
+            ${TRITON_GENERATED_DIR}/flash_attn_prefill_hd64_fp32_sm80.c
+            ${TRITON_GENERATED_DIR}/flash_attn_prefill_hd96_fp16_sm80.c
+            ${TRITON_GENERATED_DIR}/flash_attn_prefill_hd96_fp32_sm80.c
+            ${TRITON_GENERATED_DIR}/flash_attn_prefill_hd128_fp16_sm80.c
+            ${TRITON_GENERATED_DIR}/flash_attn_prefill_hd128_fp32_sm80.c
+            ${TRITON_GENERATED_DIR}/flash_attn_decode_hd64_fp16_sm80.c
+            ${TRITON_GENERATED_DIR}/flash_attn_decode_hd64_fp32_sm80.c
+            ${TRITON_GENERATED_DIR}/flash_attn_decode_hd96_fp16_sm80.c
+            ${TRITON_GENERATED_DIR}/flash_attn_decode_hd96_fp32_sm80.c
+            ${TRITON_GENERATED_DIR}/flash_attn_decode_hd128_fp16_sm80.c
+            ${TRITON_GENERATED_DIR}/flash_attn_decode_hd128_fp32_sm80.c)
+        list(APPEND GGML_TRITON_GPU_SRC ggml-triton-provider-flash-attn.cpp)
+    endif()
+
     ggml_add_backend_library(ggml-triton
                              ggml-triton.cpp
                              ggml-triton-buffer.cpp
@@ -122,6 +146,10 @@ if (GGML_TRITON)
 
     if(GGML_TRITON_WITH_ROPE)
         target_compile_definitions(ggml-triton PRIVATE GGML_TRITON_HAS_ROPE)
+    endif()
+
+    if(GGML_TRITON_WITH_FLASH_ATTN)
+        target_compile_definitions(ggml-triton PRIVATE GGML_TRITON_HAS_FLASH_ATTN)
     endif()
 
     target_include_directories(ggml-triton PRIVATE
