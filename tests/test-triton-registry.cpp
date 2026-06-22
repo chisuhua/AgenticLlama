@@ -150,6 +150,46 @@ int main() {
     }
     std::printf("Assert 5 passed: 6 triton AOT RoPE impls (NORMAL+NEOX+MROPE x fp16/fp32) registered\n");
 
+    // Assert 6 (B.3): the Triton AOT FlashAttn provider (3 head_dim × 2 dtype
+    // × 2 kernel = 12 impls) must be registered for GGML_OP_FLASH_ATTN_EXT.
+    // Mirrors B.1's Assert 4 and B.2's Assert 5 patterns. The CPU FlashAttn
+    // provider already exists (see ggml-triton-provider-cpu.cpp; covers cases
+    // our supports() rejects) but we are specifically asserting that the
+    // *triton AOT* entries (prefill/decode × hd{64,96,128} × fp16/fp32) get
+    // added by the new ggml-triton-provider-flash-attn.{h,cpp} files.
+    constexpr const char * expected_flash_attn[] = {
+        "triton_flash_attn_prefill_hd64_fp16_sm80",
+        "triton_flash_attn_prefill_hd64_fp32_sm80",
+        "triton_flash_attn_prefill_hd96_fp16_sm80",
+        "triton_flash_attn_prefill_hd96_fp32_sm80",
+        "triton_flash_attn_prefill_hd128_fp16_sm80",
+        "triton_flash_attn_prefill_hd128_fp32_sm80",
+        "triton_flash_attn_decode_hd64_fp16_sm80",
+        "triton_flash_attn_decode_hd64_fp32_sm80",
+        "triton_flash_attn_decode_hd96_fp16_sm80",
+        "triton_flash_attn_decode_hd96_fp32_sm80",
+        "triton_flash_attn_decode_hd128_fp16_sm80",
+        "triton_flash_attn_decode_hd128_fp32_sm80",
+    };
+    bool found_flash_attn[12] = {false, false, false, false, false, false, false, false, false, false, false, false};
+    if (auto * impls = reg.get_impls(GGML_OP_FLASH_ATTN_EXT)) {
+        for (const auto & impl : *impls) {
+            if (impl.provider != GGML_TRITON_PROVIDER_TRITON) continue;
+            for (int i = 0; i < 12; ++i) {
+                if (std::string(impl.name).find(expected_flash_attn[i]) != std::string::npos) {
+                    found_flash_attn[i] = true;
+                }
+            }
+        }
+    }
+    for (int i = 0; i < 12; ++i) {
+        if (!found_flash_attn[i]) {
+            std::fprintf(stderr, "FAIL: triton AOT FlashAttn impl %s not registered in global registry\n", expected_flash_attn[i]);
+            return 7;
+        }
+    }
+    std::printf("Assert 6 passed: 12 triton AOT FlashAttn impls (prefill+decode × hd{64,96,128} × fp16/fp32) registered\n");
+
     std::printf("OK: registry test passed\n");
     return 0;
 }
