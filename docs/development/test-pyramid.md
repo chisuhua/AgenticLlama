@@ -63,11 +63,12 @@ curl -s http://localhost:8080/v1/chat/completions \
 |---|---|---|
 | **任何 ggml op**（matmul / rope / norm / softmax / silu / quant / dequant / ...） | `test-backend-ops` | 每个 op 都跟参考实现对一遍。**`CONTRIBUTING.md` 强制要求**。 |
 
-> **ggml-triton op 覆盖现状（截至 B.2 / RoPE）：**
+> **ggml-triton op 覆盖现状（截至 B.3 / FlashAttn）：**
 > - `GGML_OP_UNARY` (GELU, SILU — fp16 + fp32)
 > - `GGML_OP_RMS_NORM` (unweighted + weighted — fp16 + fp32, 4 impls)  *B.1*
 > - `GGML_OP_ROPE` (NORMAL + NEOX + MROPE × fp16 + fp32, 6 impls; each dispatches to 4 AOT variants for fwd/bwd × YaRN on/off)  *B.2*
 > - `GGML_OP_ROPE_BACK` (由同一组 6 个 ROPE impl 通过 constexpr SIN_SIGN 覆盖)  *B.2*
+> - `GGML_OP_FLASH_ATTN_EXT` (prefill + decode × head_dim ∈ {64, 96, 128} × fp16 + fp32, 12 impls; decode uses split-KV with host CPU reduce)  *B.3*
 > - `GGML_OP_ADD` / `GGML_OP_MUL` (TileLang, conditional on `GGML_TRITON_HAS_TILELANG`)
 > - `GGML_OP_MUL_MAT` (CUTLASS, conditional on `GGML_TRITON_WITH_CUTLASS`)
 >
