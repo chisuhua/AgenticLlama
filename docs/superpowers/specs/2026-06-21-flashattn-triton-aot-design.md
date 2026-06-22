@@ -760,3 +760,130 @@ Registry names: `triton_flash_attn_{prefill|decode}_hd{HD}_{fp16|fp32}_sm80` (ma
 6. Add `ensure_decode_scratch` (4.E)
 7. Wire `register()` call in both `ggml-triton-provider.cpp` (global) and `ggml-triton.cpp` (per-context) — same pattern as B.1/B.2
 8. Add Assert 6 in `tests/test-triton-registry.cpp`
+
+
+---
+
+## 5. Test & verification
+
+### 5.1 Assert 6 in `tests/test-triton-registry.cpp`
+
+**Goal**: Verify all 12 triton AOT FlashAttn impls are registered in the global registry. Mirrors B.1's Assert 4 and B.2's Assert 5 pattern.
+
+**Where to add**: After B.2's Assert 5 block. Insert Assert 6 BEFORE the existing `OK: registry test passed` printf.
+
+**Distinct exit code**: Assert 6 returns `rc=7` (Assert 4 = rc 4, Assert 5 = rc 6, Assert 6 = rc 7 — distinct codes for bisect).
+
+**Code to insert** (pattern matches Assert 4/5):
+```cpp
+    // Assert 6 (B.3): the Triton AOT FlashAttn provider (3 head_dim × 2 dtype
+    // × 2 kernel = 12 impls) must be registered for GGML_OP_FLASH_ATTN_EXT.
+    constexpr const char * expected_flash_attn[] = {
+        "triton_flash_attn_prefill_hd64_fp16_sm80",
+        "triton_flash_attn_prefill_hd64_fp32_sm80",
+        "triton_flash_attn_prefill_hd96_fp16_sm80",
+        "triton_flash_attn_prefill_hd96_fp32_sm80",
+        "triton_flash_attn_prefill_hd128_fp16_sm80",
+        "triton_flash_attn_prefill_hd128_fp32_sm80",
+        "triton_flash_attn_decode_hd64_fp16_sm80",
+        "triton_flash_attn_decode_hd64_fp32_sm80",
+        "triton_flash_attn_decode_hd96_fp16_sm80",
+        "triton_flash_attn_decode_hd96_fp32_sm80",
+        "triton_flash_attn_decode_hd128_fp16_sm80",
+        "triton_flash_attn_decode_hd128_fp32_sm80",
+    };
+    bool found_flash_attn[12] = {false, false, false, false, false, false, false, false, false, false, false, false};
+    if (auto * impls = reg.get_impls(GGML_OP_FLASH_ATTN_EXT)) {
+        for (const auto & impl : *impls) {
+            if (impl.provider != GGML_TRITON_PROVIDER_TRITON) continue;
+            for (int i = 0; i < 12; ++i) {
+                if (std::string(impl.name).find(expected_flash_attn[i]) != std::string::npos) {
+                    found_flash_attn[i] = true;
+                }
+            }
+        }
+    }
+    for (int i = 0; i < 12; ++i) {
+        if (!found_flash_attn[i]) {
+            std::fprintf(stderr, "FAIL: triton AOT FlashAttn impl %s not registered in global registry\n", expected_flash_attn[i]);
+            return 7;
+        }
+    }
+    std::printf("Assert 6 passed: 12 triton AOT FlashAttn impls (prefill+decode × hd{64,96,128} × fp16/fp32) registered\n");
+```
+
+**Expected output** (after build):
+```
+Assert 4 passed: triton AOT RMS_NORM fp16 + fp32 providers are registered
+Assert 5 passed: 6 triton AOT RoPE impls (NORMAL+NEOX+MROPE x fp16/fp32) registered
+Assert 6 passed: 12 triton AOT FlashAttn impls (prefill+decode × hd{64,96,128} × fp16/fp32) registered
+OK: registry test passed
+EXIT=0
+```
+
+### 5.2 `test-backend-ops` coverage
+
+`test-backend-ops` is the standard ggml op correctness test. Compares each op's output against a CPU reference implementation.
+
+**B.3 FlashAttn coverage targets**:
+- Both kernels (prefill N>1, decode N=1)
+- Both dtype (fp16, fp32)
+- Testable head_dim: 96 (MiniMind-3) and 128 (Qwen3-72B); 64 is optional
+- Causal semantics (matches CPU reference)
+- Edge cases: S=0 (empty KV), S=1, S=2048 (long context)
+
+**Test command** (per test-pyramid.md Level 3):
+```bash
+./build/bin/test-backend-ops test -o FLASH_ATTN_EXT --backends CPU,TRITON -ngl 999
+```
+
+**Stage 1 vs GPU-host verification**:
+- **Stage 1 (CPU-only host)**: `test-backend-ops` exercises the dispatch + provider + registry path. Numerical correctness cannot be verified (placeholder CUBIN does no real compute). Exit: build succeeds, dispatch paths reachable, no crash.
+- **GPU host (Stage 2+)**: `Δ ≤ 1e-3` fp16 vs CPU reference (per Phase A exit criteria, `docs/performance/unified-backend.md`).
+
+### 5.3 Verification matrix (per B.3 exit criteria)
+
+| Check | Stage 1 (CPU-only) | Stage 2+ (GPU host) |
+|---|---|---|
+| `compile_kernels.py` regenerates 24 .c/.h without error | ✅ Required | ✅ Required |
+| Generated headers match expected (signatures, arg counts) | ✅ Required | ✅ Required |
+| GELU/SiLU/RMSNorm/RoPE byte-compat preserved | ✅ Required | ✅ Required |
+| CMake configure succeeds (ON + OFF) | ✅ Required | ✅ Required |
+| `test-triton-registry` exits 0 (Assert 4 + 5 + 6) | ✅ Required | ✅ Required |
+| `test-triton-registry` exits 7 with `GGML_TRITON_WITH_FLASH_ATTN=OFF` | ✅ Required | ✅ Required |
+| `test-backend-ops FLASH_ATTN_EXT` builds and dispatches | ✅ Required | ✅ Required |
+| Numerical: `Δ ≤ 1e-3` fp16 vs CPU reference | ⏸ Deferred (Phase 0 audit §0.4) | ✅ Required |
+| Numerical: `Δ ≤ 1e-5` fp32 vs CPU reference | ⏸ Deferred | ✅ Required |
+| MiniMind-3 smoke test: PPL unchanged with B.3 enabled | ⏸ Deferred | ✅ Required |
+| MiniMind-3 `test-llama-archs` builds + runs forward + writes GGUF | ⏸ Deferred | ✅ Required |
+
+### 5.4 Test plan (TDD structure, mirrors B.2)
+
+**TDD red step (B.3 Task 1)**: Add Assert 6 → run `test-triton-registry` → expect exit 7 (Assert 6 fails, Assert 4 + 5 still pass). Commit failing test.
+
+**Implementation steps (B.3 Tasks 7-9)**: Wire provider cpp + CMakeLists + global/per-context registration. After each step, rebuild and re-run. Assert 6 transitions FAIL → PASS as registration is wired.
+
+**TDD green step (B.3 Task 11)**: All 12 launchers + provider cpp wired. `test-triton-registry` exits 0 with all 6 Asserts passing.
+
+**Build verification (B.3 Task 14)**: cmake with `GGML_TRITON_WITH_FLASH_ATTN=OFF` succeeds. Library has 0 FlashAttn symbols. `test-triton-registry` exits 7 (Assert 6 fails, others pass).
+
+**Cross-backend numerical check (B.3 Task 12, deferred to GPU host)**: `test-backend-ops FLASH_ATTN_EXT --backends CPU,TRITON` shows `Δ ≤ 1e-3` for fp16 and `Δ ≤ 1e-5` for fp32. This is the actual Stage 1 exit criterion per Phase A.
+
+### 5.5 Test file modifications summary
+
+| File | Change | Task |
+|---|---|---|
+| `tests/test-triton-registry.cpp` | Add Assert 6 (12 launcher names, return 7 on miss) | B.3 Task 1 |
+| `docs/development/test-pyramid.md` | Add B.3 coverage marker (12 new ROPE-style entries + Assert 6) | B.3 Task 15 |
+| `docs/development/test-pyramid.md` (B.2 line) | No change (already there) | n/a |
+| `tests/test-backend-ops` (if needed) | No source change; FLASH_ATTN_EXT auto-included via op registry | n/a |
+
+### 5.6 CI gate matrix (per test-pyramid.md Level 1 + 2)
+
+| Level | Command | Pass criteria |
+|---|---|---|
+| 1 | `cmake -B build -DGGML_TRITON=ON && cmake --build build --target test-triton-registry` | Build succeeds |
+| 1 | `./build/bin/test-triton-registry` | Exit 0, all 6 Asserts pass |
+| 2 | `cmake -B build-off -DGGML_TRITON=ON -DGGML_TRITON_WITH_FLASH_ATTN=OFF && cmake --build build-off --target test-triton-registry` | Build succeeds |
+| 2 | `./build-off/bin/test-triton-registry` | Exit 7 (Assert 6 fails, others pass) |
+| 3 | `./build/bin/test-backend-ops test -o FLASH_ATTN_EXT --backends CPU,TRITON` | Build succeeds (numeric check deferred) |
