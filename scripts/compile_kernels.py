@@ -46,16 +46,28 @@ class Variant:
     @property
     def tag(self) -> str:
         # Fold the constexpr-specialised axes that the AOT driver cares about
-        # into the filename so each variant emits its own .c/.h pair.  This is
-        # what enables 24 distinct launchers for RoPE (3 modes x 2 sin x 2 yarn
-        # x 2 dtype).  Variants that do not specialise these axes (GELU/SiLU,
+        # into the filename so each variant emits its own .c/.h pair.
+        #
+        # Recognised axes (all optional; only present axes are folded):
+        #   * HEAD_DIM  (B.3) — folded as "hd{N}" prefix; ensures 3 head_dim
+        #                        variants of the same kernel/dtype do not
+        #                        collide on filename.
+        #   * SIN_SIGN  (B.2) — folded as "fwd" (>0) or "bwd" (<=0).
+        #   * YA_ON     (B.2) — folded as "yarnon" (!=0) or "yarnoff" (==0).
+        #
+        # Variants that do not specialise any of these axes (GELU/SiLU,
         # RMSNorm) keep the pre-B.2 "<dtype>_<arch>" filename to preserve
         # byte-compat with the existing committed launchers.
-        if "SIN_SIGN" in self.specialise or "YA_ON" in self.specialise:
-            sin  = "fwd"     if int(self.specialise["SIN_SIGN"]) > 0 else "bwd"
-            yarn = "yarnon"  if int(self.specialise["YA_ON"])    != 0 else "yarnoff"
-            return f"{sin}_{yarn}_{self.dtype}_{self.arch}"
-        return f"{self.dtype}_{self.arch}"
+        parts = []
+        if "HEAD_DIM" in self.specialise:
+            parts.append(f"hd{int(self.specialise['HEAD_DIM'])}")
+        if "SIN_SIGN" in self.specialise:
+            parts.append("fwd" if int(self.specialise["SIN_SIGN"]) > 0 else "bwd")
+        if "YA_ON" in self.specialise:
+            parts.append("yarnon" if int(self.specialise["YA_ON"]) != 0 else "yarnoff")
+        parts.append(self.dtype)
+        parts.append(self.arch)
+        return "_".join(parts)
 
 
 @dataclass
@@ -368,6 +380,61 @@ LAUNCHER_SHAPES = {
         ],
         "grid_param": "rows",
     },
+    # B.3 FlashAttn shapes (2 kernels x per-kernel ABI per Oracle #1 fix).
+    #   prefill: 4 ptrs (q, k, v, dst) + 8 ints (neq1, neq2, neq3, nek1, S,
+    #            n_heads, rows, num_q_blocks) + 1 float (scale)
+    #            = 13 args after stream.
+    #   decode:  5 ptrs (q, k, v, dst, scratch) + 9 ints (neq1=1, neq2, neq3,
+    #            nek1, S, n_heads, q_pos, num_kv_chunks, rows) + 1 float
+    #            (scale) = 15 args after stream.
+    # Grid is 2D: program_id(0) = q_block (prefill) or kv_chunk (decode),
+    # program_id(1) = head/batch row.  Both axes use "exact" mode (host
+    # pre-computes the per-tile count) — Oracle #5 fix.  Per Oracle #1 fix,
+    # 2D grid requires both grid_param + grid_param_y on the shape.
+    "flash_attn_prefill": {
+        "params": [
+            ("CUdeviceptr", "q"),
+            ("CUdeviceptr", "k"),
+            ("CUdeviceptr", "v"),
+            ("CUdeviceptr", "dst"),
+            ("int32_t",     "neq1"),
+            ("int32_t",     "neq2"),
+            ("int32_t",     "neq3"),
+            ("int32_t",     "nek1"),
+            ("int32_t",     "S"),
+            ("int32_t",     "n_heads"),
+            ("int32_t",     "rows"),
+            ("int32_t",     "num_q_blocks"),
+            ("float",       "scale"),
+        ],
+        "grid_param":   "num_q_blocks",
+        "grid_mode":    "exact",
+        "grid_param_y": "rows",
+        "grid_mode_y":  "exact",
+    },
+    "flash_attn_decode": {
+        "params": [
+            ("CUdeviceptr", "q"),
+            ("CUdeviceptr", "k"),
+            ("CUdeviceptr", "v"),
+            ("CUdeviceptr", "dst"),
+            ("CUdeviceptr", "scratch"),
+            ("int32_t",     "neq1"),
+            ("int32_t",     "neq2"),
+            ("int32_t",     "neq3"),
+            ("int32_t",     "nek1"),
+            ("int32_t",     "S"),
+            ("int32_t",     "n_heads"),
+            ("int32_t",     "q_pos"),
+            ("int32_t",     "num_kv_chunks"),
+            ("int32_t",     "rows"),
+            ("float",       "scale"),
+        ],
+        "grid_param":   "num_kv_chunks",
+        "grid_mode":    "exact",
+        "grid_param_y": "rows",
+        "grid_mode_y":  "exact",
+    },
 }
 
 
@@ -395,6 +462,42 @@ def _format_byte_array(blob: bytes, indent: str = "    ", per_line: int = 12) ->
         chunk = blob[i:i + per_line]
         parts.append(indent + ", ".join(f"0x{b:02x}" for b in chunk))
     return ",\n".join(parts)
+
+
+def _format_grid_expr(shape: dict, axis: str = "x") -> str:
+    """Render the C expression for the grid size on the given axis.
+
+    Modes (per Oracle #5 fix):
+      * "divide" (default): ceil(grid_param / divisor).  divisor is
+        shape["grid_divisor"] if set, else falls back to the literal
+        C identifier "block" (the kTritonBlockSize_<name> local in the
+        generated launcher).  This matches the pre-B.3 behaviour for
+        B.1/B.2 entries exactly — backward compat preserved.
+      * "exact":  use grid_param as-is (host has already pre-computed
+        the per-tile count).  Used by B.3 FlashAttn entries.
+
+    axis="x" reads shape["grid_param"] / shape["grid_mode"];
+    axis="y" reads shape["grid_param_y"] / shape["grid_mode_y"]
+    (defaulting grid_mode_y to the x-axis mode for symmetry).
+    """
+    if axis == "y":
+        param = shape.get("grid_param_y")
+        if param is None:
+            raise ValueError(f"axis='y' but no grid_param_y in shape: {shape!r}")
+        mode = shape.get("grid_mode_y", shape.get("grid_mode", "divide"))
+    else:
+        param = shape.get("grid_param")
+        if param is None:
+            raise ValueError(f"no grid_param in shape: {shape!r}")
+        mode = shape.get("grid_mode", "divide")
+    if mode == "exact":
+        return f"(int)({param})"
+    if mode == "divide":
+        divisor = shape.get("grid_divisor")
+        if divisor is None:
+            return f"(int)(({param} + block - 1) / block)"
+        return f"(int)(({param} + {divisor} - 1) / {divisor})"
+    raise ValueError(f"Unknown grid_mode: {mode!r}")
 
 
 def _emit_header(out_dir: Path, kernel: Kernel, variant: Variant) -> Path:
@@ -455,6 +558,20 @@ def _emit_source(out_dir: Path, kernel: Kernel, variant: Variant,
         shape = _shape_for(kernel.name)
         params_lines = _format_params_lines(shape, include_cu_stream=True)
         arg_addrs = _format_arg_addrs(shape)
+        # Per Oracle #1 fix: 2D grid when grid_param_y is present.
+        # 1D path preserved byte-compat with B.1/B.2 entries (no grid_param_y).
+        if "grid_param_y" in shape:
+            grid_x_expr = _format_grid_expr(shape, "x")
+            grid_y_expr = _format_grid_expr(shape, "y")
+            grid_decl = (
+                f"const int grid_x = {grid_x_expr};\n"
+                f"                const int grid_y = {grid_y_expr};"
+            )
+            launch_dims = "grid_x, grid_y, 1,\n                                            block, 1, 1,"
+        else:
+            grid_x_expr = _format_grid_expr(shape, "x")
+            grid_decl = f"const int grid  = {grid_x_expr};"
+            launch_dims = "grid, 1, 1,\n                                            block, 1, 1,"
         text = textwrap.dedent(f"""\
             // AUTO-GENERATED by scripts/compile_kernels.py — do not edit by hand.
 
@@ -494,11 +611,10 @@ def _emit_source(out_dir: Path, kernel: Kernel, variant: Variant,
 
                 void * args[] = {{ {arg_addrs} }};
                 const int block = kTritonBlockSize_{name};
-                const int grid  = (int)(({shape["grid_param"]} + block - 1) / block);
+                {grid_decl}
 
                 CUresult r = cuLaunchKernel(g_function,
-                                            grid, 1, 1,
-                                            block, 1, 1,
+                                            {launch_dims}
                                             0, stream,
                                             args, NULL);
                 return (r == CUDA_SUCCESS) ? 0 : -1;
