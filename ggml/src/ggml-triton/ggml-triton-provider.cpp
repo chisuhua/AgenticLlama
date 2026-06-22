@@ -8,6 +8,10 @@
 #include "ggml-triton-provider-rope.h"
 #endif
 
+#ifdef GGML_TRITON_HAS_FLASH_ATTN
+#include "ggml-triton-provider-flash-attn.h"
+#endif
+
 #ifdef GGML_TRITON_HAS_CUTLASS
 #include "ggml-triton-provider-cutlass.h"
 #endif
@@ -74,6 +78,9 @@ ggml_triton_op_registry & ggml_triton_global_registry() {
 #endif
 #ifdef GGML_TRITON_HAS_ROPE
         ggml_triton_register_rope_providers(registry);
+#endif
+#ifdef GGML_TRITON_HAS_FLASH_ATTN
+        ggml_triton_register_flash_attn_providers(registry);
 #endif
 #ifdef GGML_TRITON_HAS_CUTLASS
         ggml_triton_register_cutlass_providers(registry);
