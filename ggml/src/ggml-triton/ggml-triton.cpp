@@ -136,6 +136,16 @@ static void ggml_backend_triton_free(ggml_backend_t backend) {
             if (ctx->cu_stream) {
                 cuStreamDestroy(ctx->cu_stream);
             }
+            // B.3 FlashAttn decode scratch free
+            if (ctx->decode_scratch) {
+                cuMemFree(ctx->decode_scratch);
+                ctx->decode_scratch = 0;
+            }
+            if (ctx->decode_scratch_host) {
+                free(ctx->decode_scratch_host);
+                ctx->decode_scratch_host = nullptr;
+            }
+            ctx->decode_scratch_size = 0;
             CUcontext popped = nullptr;
             cuCtxPopCurrent(&popped);
             cuDevicePrimaryCtxRelease(ctx->cu_device);
@@ -481,6 +491,10 @@ ggml_backend_t ggml_backend_triton_init(int device) {
     ctx->cu_device          = cu_dev;
     ctx->cu_context         = primary;
     ctx->cu_stream          = stream;
+    // B.3 FlashAttn decode scratch init (allocated lazily on first decode call)
+    ctx->decode_scratch      = 0;
+    ctx->decode_scratch_host = nullptr;
+    ctx->decode_scratch_size = 0;
     ctx->compute_capability = major * 10 + minor;
     ctx->name               = std::string("Triton") + std::to_string(device);
 

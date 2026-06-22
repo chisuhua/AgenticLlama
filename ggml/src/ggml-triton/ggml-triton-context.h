@@ -36,6 +36,13 @@ struct ggml_backend_triton_context {
     std::unordered_map<std::string, CUmodule>        modules;
     // kernel name -> resolved CUfunction inside the corresponding module
     std::unordered_map<std::string, CUfunction>      functions;
+
+    // B.3 FlashAttn decode scratch (first persistent per-call state in the Triton subsystem).
+    // Allocated lazily on first decode call (Task 10's ensure_decode_scratch).
+    // Resized if needed.  Freed in ggml_backend_triton_free.
+    CUdeviceptr                                      decode_scratch      = 0;     // device scratch buffer (M, S, V_unnormalized partials)
+    float *                                          decode_scratch_host = nullptr; // host mirror for CPU reduce pass (after cuMemcpyDtoHAsync)
+    size_t                                           decode_scratch_size = 0;     // current size in bytes; 0 = unallocated
 #endif
 
     std::mutex                                       mutex;
