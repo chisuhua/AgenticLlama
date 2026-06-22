@@ -496,3 +496,267 @@ The B.2 RoPE `rope.py:48-49` does 1 row per program (`pid = program_id(0)`, load
 **Stage 2 audit needed**: B.1 RMSNorm requires adding `pid = tl.program_id(0)` to the kernel, plus `num_blocks` runtime arg (host-computed `cdiv(N, 1024)`), plus `grid_mode="exact"`. Larger fix than B.2 RoPE.
 
 **B.3 implication**: B.3 kernels use `pid = program_id(0)` and `program_id(1)` correctly from the start (Section 2 design), so B.3 is **immune to this bug class**. Only B.1/B.2 retro-fix needed in Stage 2.
+
+
+---
+
+## 4. Provider file design
+
+### 4.1 File structure
+
+`ggml/src/ggml-triton/ggml-triton-provider-flash-attn.{h,cpp}` mirrors B.2's `ggml-triton-provider-rope.{h,cpp}` structure:
+
+**Header**:
+```cpp
+#pragma once
+#include "ggml-triton-provider.h"
+
+void ggml_triton_register_flash_attn_providers(ggml_triton_op_registry & registry);
+```
+
+**CPP** — top-level structure:
+```
+#include "..."
+#include <cmath>          // sqrtf
+#include <cstring>        // (none used)
+#include <cuda.h>         // CUdeviceptr, cuMemAlloc, cuMemFree, cuMemcpyDtoHAsync, cuStreamSynchronize
+
+// --- shared helpers (extracted to avoid 12x duplication) ---
+// 4.A: tensor dim helpers
+// 4.B: shape constraints
+// 4.C: arg packers (inlined in execute() per B.2 style)
+// 4.D: scale precomputation
+// 4.E: scratch alloc/resize helper
+
+// --- 12 supports() functions (3 head_dim × 2 dtype × 2 kernel) ---
+
+// --- 12 execute() functions (same shape matrix) ---
+// prefill execute(): single launcher call
+// decode execute(): kernel + D2H + sync + CPU reduce (4-step)
+
+// --- register function ---
+void ggml_triton_register_flash_attn_providers(ggml_triton_op_registry & registry);
+```
+
+### 4.2 Helper functions (4.A dim, 4.B constraints, 4.D scale, 4.E scratch)
+
+```cpp
+// 4.A: tensor dim helpers
+static inline int64_t op_neq0(const ggml_tensor * op) { return op->src[0]->ne[0]; }  // = DK
+static inline int64_t op_neq1(const ggml_tensor * op) { return op->src[0]->ne[1]; }  // = N
+static inline int64_t op_neq2(const ggml_tensor * op) { return op->src[0]->ne[2]; }  // = n_heads
+static inline int64_t op_neq3(const ggml_tensor * op) { return op->src[0]->ne[3]; }  // = batch
+static inline int64_t op_nek1(const ggml_tensor * op) { return op->src[1]->ne[1]; }  // = S (KV seq)
+static inline int64_t op_nek2(const ggml_tensor * op) { return op->src[1]->ne[2]; }  // = n_kv_heads
+static inline int64_t op_nev2(const ggml_tensor * op) { return op->src[2]->ne[2]; }  // = n_kv_heads
+static inline int64_t op_ne0(const ggml_tensor * op)  { return op->ne[0]; }         // = DV
+
+// 4.B: shape constraints
+static inline bool op_is_flash_attn(const ggml_tensor * op) {
+    return op != nullptr && op->op == GGML_OP_FLASH_ATTN_EXT;
+}
+static inline bool op_mask_is_null(const ggml_tensor * op) {
+    return op->src[3] == nullptr;
+}
+static inline bool op_is_mha(const ggml_tensor * op) {
+    return op_neq2(op) == op_nek2(op) && op_neq2(op) == op_nev2(op);
+}
+static inline bool op_n_heads_supported(const ggml_tensor * op) {
+    return op_neq2(op) * op_neq3(op) <= 32;
+}
+static inline bool op_dtypes_match(const ggml_tensor * op, enum ggml_type want) {
+    return op->type == want
+        && op->src[0]->type == want
+        && op->src[1]->type == want
+        && op->src[2]->type == want;
+}
+static inline bool op_is_contiguous(const ggml_tensor * t) {
+    return t->nb[0] == ggml_type_size(t->type)
+        && t->nb[1] == t->nb[0] * t->ne[0]
+        && t->nb[2] == t->nb[1] * t->ne[1]
+        && t->nb[3] == t->nb[2] * t->ne[2];
+}
+
+// 4.D: scale precomputation (1.0 / sqrt(HEAD_DIM))
+static inline float op_scale(const ggml_tensor * op) {
+    return 1.0f / sqrtf((float)op_neq0(op));
+}
+
+// 4.E: scratch alloc/resize helper
+static inline int ensure_decode_scratch(ggml_backend_triton_context * ctx, size_t needed) {
+    if (ctx->decode_scratch_size >= needed) return 0;
+    if (ctx->decode_scratch) {
+        cuMemFree(ctx->decode_scratch);
+        ctx->decode_scratch = 0;
+    }
+    if (ctx->decode_scratch_host) {
+        free(ctx->decode_scratch_host);
+        ctx->decode_scratch_host = nullptr;
+    }
+    if (cuMemAlloc(&ctx->decode_scratch, needed) != CUDA_SUCCESS) return -1;
+    ctx->decode_scratch_host = (float*)malloc(needed);
+    if (!ctx->decode_scratch_host) return -1;
+    ctx->decode_scratch_size = needed;
+    return 0;
+}
+```
+
+### 4.3 12 `supports()` functions
+
+Naming: `triton_flash_attn_{prefill|decode}_hd{HD}_{fp16|fp32}_supports` (12 total).
+
+Pattern (each ~6 lines):
+```cpp
+static bool triton_flash_attn_prefill_hd64_fp16_supports(const ggml_tensor * op) {
+    if (!op_is_flash_attn(op))     return false;
+    if (!op_mask_is_null(op))      return false;
+    if (!op_dtypes_match(op, GGML_TYPE_F16)) return false;
+    if (op_neq0(op) != 64)         return false;  // THIS function is for HD=64
+    if (!op_is_mha(op))            return false;
+    if (!op_n_heads_supported(op)) return false;
+    if (!op_is_contiguous(op) || !op_is_contiguous(op->src[0])
+        || !op_is_contiguous(op->src[1]) || !op_is_contiguous(op->src[2])) return false;
+    return true;
+}
+// 11 more: 2 dtype (fp16/fp32) × 3 head_dim (64/96/128) × 2 kernel (prefill/decode)
+```
+
+### 4.4 12 `execute()` functions
+
+**Prefill execute** (single launcher call, ~25 lines each):
+
+```cpp
+static bool triton_flash_attn_prefill_hd96_fp16_execute(
+    ggml_backend_triton_context * ctx, const ggml_tensor * op) {
+    const ggml_tensor * q = op->src[0], * k = op->src[1], * v = op->src[2];
+    if (q->data == nullptr || k->data == nullptr || v->data == nullptr
+        || op->data == nullptr) return false;
+
+    const int32_t neq1         = (int32_t)op_neq1(op);
+    const int32_t neq2         = (int32_t)op_neq2(op);
+    const int32_t neq3         = (int32_t)op_neq3(op);
+    const int32_t nek1         = (int32_t)op_nek1(op);
+    const int32_t S            = (int32_t)op_neq3(op);  // batch
+    const int32_t n_heads      = neq2;
+    const int32_t rows         = neq2 * neq3;
+    const int32_t num_q_blocks = (neq1 + 127) / 128;   // BLOCK_Q=128 constexpr
+    const float   scale        = op_scale(op);
+
+    int rc = triton_launch_flash_attn_prefill_hd96_fp16_sm80(
+        ctx->cu_stream,
+        (CUdeviceptr)q->data, (CUdeviceptr)k->data, (CUdeviceptr)v->data, (CUdeviceptr)op->data,
+        neq1, neq2, neq3, nek1, S, n_heads, rows, num_q_blocks, scale);
+    return rc == 0;
+}
+```
+
+**Decode execute** (multi-step: kernel + D2H + sync + CPU reduce, ~50 lines):
+
+```cpp
+static bool triton_flash_attn_decode_hd96_fp16_execute(
+    ggml_backend_triton_context * ctx, const ggml_tensor * op) {
+    const ggml_tensor * q = op->src[0], * k = op->src[1], * v = op->src[2];
+    if (q->data == nullptr || k->data == nullptr || v->data == nullptr
+        || op->data == nullptr) return false;
+
+    constexpr int32_t HD = 96;                        // hardcoded per-kernel-fn
+    constexpr int32_t BLOCK_KV = 64;
+    const int32_t neq2          = (int32_t)op_neq2(op);
+    const int32_t neq3          = (int32_t)op_neq3(op);
+    const int32_t nek1          = (int32_t)op_nek1(op);
+    const int32_t rows          = neq2 * neq3;
+    const int32_t num_kv_chunks = (nek1 + BLOCK_KV - 1) / BLOCK_KV;
+    const int32_t S             = neq3;
+    const int32_t n_heads       = neq2;
+    const int32_t q_pos         = 0;                    // decode: current token only
+    const float   scale         = op_scale(op);
+    const int32_t scratch_per_chunk = 2 + HD;          // M, S, V_unnormalized
+    const size_t  scratch_size  = (size_t)rows * num_kv_chunks * scratch_per_chunk * sizeof(float);
+
+    // 1. Lazy alloc / resize scratch
+    if (ensure_decode_scratch(ctx, scratch_size) != 0) return false;
+
+    // 2. Launch decode kernel (writes partials to device scratch)
+    int rc = triton_launch_flash_attn_decode_hd96_fp16_sm80(
+        ctx->cu_stream,
+        (CUdeviceptr)q->data, (CUdeviceptr)k->data, (CUdeviceptr)v->data, (CUdeviceptr)op->data,
+        (CUdeviceptr)ctx->decode_scratch,
+        /*neq1=*/1, neq2, neq3, nek1, S, n_heads, q_pos, num_kv_chunks, rows, scale);
+    if (rc != 0) return false;
+
+    // 3. D2H async copy + stream sync
+    cuMemcpyDtoHAsync(ctx->decode_scratch_host, ctx->decode_scratch,
+                      scratch_size, ctx->cu_stream);
+    cuStreamSynchronize(ctx->cu_stream);
+
+    // 4. CPU reduce pass per (head, batch)
+    float * h = ctx->decode_scratch_host;
+    float * dst = (float*)op->data;
+    const int64_t dst_nb1 = op->nb[1];                 // stride between heads (DV)
+    for (int32_t h_idx = 0; h_idx < rows; h_idx++) {
+        float m_final = -INFINITY, l_final = 0.0f;
+        float v_final[HD] = {0};
+        for (int32_t c = 0; c < num_kv_chunks; c++) {
+            float * p = h + (h_idx * num_kv_chunks + c) * scratch_per_chunk;
+            float m_chunk = p[0], s_chunk = p[1];
+            float * v_chunk = p + 2;
+            float m_new = fmaxf(m_final, m_chunk);
+            float alpha = expf(m_final - m_new);
+            float beta  = expf(m_chunk - m_new);
+            l_final = l_final * alpha + s_chunk * beta;
+            for (int i = 0; i < HD; i++) v_final[i] = v_final[i] * alpha + v_chunk[i] * beta;
+            m_final = m_new;
+        }
+        // Write normalized V to dst[head, batch] (dst is fp32 per ops.cpp:8883)
+        float * dst_h = dst + h_idx * dst_nb1 / sizeof(float);
+        for (int i = 0; i < HD; i++) dst_h[i] = v_final[i] / l_final;
+    }
+    return true;
+}
+```
+
+### 4.5 Provider struct new fields
+
+`ggml-triton-context.h` (or wherever per-context state lives) gains:
+
+```cpp
+struct ggml_backend_triton_context {
+    // ... existing fields ...
+    CUdeviceptr decode_scratch;       // device scratch buffer (persistent)
+    float *    decode_scratch_host;   // host mirror for CPU reduce
+    size_t     decode_scratch_size;   // current size in bytes; 0 = unallocated
+};
+```
+
+**Lifecycle** (per Section 1.5 + Section 2.B):
+- **Alloc**: lazy on first decode call via `cuMemAlloc` (device) + `malloc` (host). 4.E `ensure_decode_scratch` handles resize.
+- **Resize**: if `scratch_size > ctx->decode_scratch_size`, free + realloc.
+- **Free**: in context destructor (`ggml_backend_triton_free`).
+
+### 4.6 Register function
+
+```cpp
+void ggml_triton_register_flash_attn_providers(ggml_triton_op_registry & registry) {
+    registry.register_impl(GGML_OP_FLASH_ATTN_EXT, {
+        "triton_flash_attn_prefill_hd64_fp16_sm80",
+        GGML_TRITON_PROVIDER_TRITON,
+        triton_flash_attn_prefill_hd64_fp16_supports,
+        triton_flash_attn_prefill_hd64_fp16_execute,
+        100,
+    });
+    // ... 11 more: 2 dtype (fp16/fp32) × 3 head_dim (64/96/128) × 2 kernel (prefill/decode)
+}
+```
+
+Registry names: `triton_flash_attn_{prefill|decode}_hd{HD}_{fp16|fp32}_sm80` (matches launcher function name with `triton_launch_` → `triton_` prefix per B.2 convention).
+
+### 4.7 Implementation guidance (where to start in plan)
+
+1. Copy `ggml-triton-provider-rope.{h,cpp}` as starting template
+2. Replace 6 supports/execute pairs with 12 (3 head_dim × 2 dtype × 2 kernel)
+3. Add helper sections 4.A/4.B/4.D/4.E
+4. Add scratch state fields to `ggml_backend_triton_context` struct
+5. Implement decode's multi-step execute (kernel + D2H + sync + CPU reduce)
+6. Add `ensure_decode_scratch` (4.E)
+7. Wire `register()` call in both `ggml-triton-provider.cpp` (global) and `ggml-triton.cpp` (per-context) — same pattern as B.1/B.2
+8. Add Assert 6 in `tests/test-triton-registry.cpp`
