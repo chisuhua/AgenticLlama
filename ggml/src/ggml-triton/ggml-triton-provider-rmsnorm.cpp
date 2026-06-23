@@ -120,7 +120,7 @@ static bool triton_rms_norm_weighted_fp16_execute(struct ggml_backend_triton_con
     const int32_t     N          = (int32_t) node->src[0]->ne[0];
     const int32_t     num_blocks = rms_norm_num_blocks(node);
     const int rc = triton_launch_rms_norm_weighted_fp16_sm80(
-        ctx->cu_stream, d_x, d_w, d_y, N, num_blocks);
+        ctx->cu_stream, d_x, d_y, d_w, N, num_blocks);
     return rc == 0;
 }
 
@@ -175,7 +175,7 @@ static bool triton_rms_norm_weighted_fp32_execute(struct ggml_backend_triton_con
     const int32_t     N          = (int32_t) node->src[0]->ne[0];
     const int32_t     num_blocks = rms_norm_num_blocks(node);
     const int rc = triton_launch_rms_norm_weighted_fp32_sm80(
-        ctx->cu_stream, d_x, d_w, d_y, N, num_blocks);
+        ctx->cu_stream, d_x, d_y, d_w, N, num_blocks);
     return rc == 0;
 }
 

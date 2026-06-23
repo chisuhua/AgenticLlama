@@ -9,8 +9,8 @@
         int triton_launch_rms_norm_weighted_fp16_sm80(
             CUstream    stream,
 CUdeviceptr d_x,
-CUdeviceptr d_w,
 CUdeviceptr d_y,
+CUdeviceptr d_w,
 int32_t     N,
 int32_t     num_blocks);
 

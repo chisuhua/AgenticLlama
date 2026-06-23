@@ -306,11 +306,17 @@ LAUNCHER_SHAPES = {
         "grid_mode":  "exact",
     },
     # B.1 RMSNorm weighted: y = x * rsqrt(mean(x*x) + eps) * w
+    # The C ABI here must match triton_kernels/rms_norm.py's kernel signature
+    # (x_ptr, y_ptr, w_ptr, N, num_blocks, ...): the kernel sees args[0] as
+    # x_ptr, args[1] as y_ptr, args[2] as w_ptr, etc. Earlier draft had
+    # d_w/d_y swapped, which silently miscomputed weighted RMSNorm on a real
+    # GPU host (placeholder CUBIN on CPU-only box never executes the kernel,
+    # so the bug was invisible to the test-triton-registry regression).
     "rms_norm_weighted": {
         "params": [
             ("CUdeviceptr", "d_x"),
-            ("CUdeviceptr", "d_w"),
             ("CUdeviceptr", "d_y"),
+            ("CUdeviceptr", "d_w"),
             ("int32_t",     "N"),
             ("int32_t",     "num_blocks"),
         ],
