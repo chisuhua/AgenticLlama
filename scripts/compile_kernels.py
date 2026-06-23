@@ -291,13 +291,19 @@ LAUNCHER_SHAPES = {
         "grid_param": "N",
     },
     # B.1 RMSNorm unweighted: y = x * rsqrt(mean(x*x) + eps)
+    # Stage 2 retro-fix: d_w is a dummy (host passes 0); grid_mode="exact"
+    # so the C grid equals the host-computed num_blocks (= ne[1]*ne[2]*ne[3]),
+    # not (N + block - 1) / block.
     "rms_norm_unweighted": {
         "params": [
             ("CUdeviceptr", "d_x"),
             ("CUdeviceptr", "d_y"),
+            ("CUdeviceptr", "d_w"),
             ("int32_t",     "N"),
+            ("int32_t",     "num_blocks"),
         ],
-        "grid_param": "N",
+        "grid_param": "num_blocks",
+        "grid_mode":  "exact",
     },
     # B.1 RMSNorm weighted: y = x * rsqrt(mean(x*x) + eps) * w
     "rms_norm_weighted": {
@@ -306,8 +312,10 @@ LAUNCHER_SHAPES = {
             ("CUdeviceptr", "d_w"),
             ("CUdeviceptr", "d_y"),
             ("int32_t",     "N"),
+            ("int32_t",     "num_blocks"),
         ],
-        "grid_param": "N",
+        "grid_param": "num_blocks",
+        "grid_mode":  "exact",
     },
     # B.2 RoPE shapes.  Per-mode ABI (counted after the stream param that
     # _format_params_lines prepends), and a trailing "rows" runtime arg
@@ -338,6 +346,7 @@ LAUNCHER_SHAPES = {
             ("int32_t",     "rows"),
         ],
         "grid_param": "rows",
+        "grid_mode":  "exact",
     },
     "rope_neox": {
         "params": [
@@ -356,6 +365,7 @@ LAUNCHER_SHAPES = {
             ("int32_t",     "rows"),
         ],
         "grid_param": "rows",
+        "grid_mode":  "exact",
     },
     "rope_mrope": {
         "params": [
@@ -379,6 +389,7 @@ LAUNCHER_SHAPES = {
             ("int32_t",     "rows"),
         ],
         "grid_param": "rows",
+        "grid_mode":  "exact",
     },
     # B.3 FlashAttn shapes (2 kernels x per-kernel ABI per Oracle #1 fix).
     #   prefill: 4 ptrs (q, k, v, dst) + 8 ints (neq1, neq2, neq3, nek1, S,

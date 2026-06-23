@@ -10,8 +10,8 @@
 //     cpu_rms_norm_f32_execute
 //
 // Per-row computation:
-//   y[i] = x[i] * rsqrt(mean(x*x) + eps) * w[i]    (weighted variant)
-//   y[i] = x[i] * rsqrt(mean(x*x) + eps)           (unweighted variant, src[1]==nullptr)
+//   y[i] = x[i] * rsqrt(mean(x[i]^2) + eps) * w[i]    (weighted variant)
+//   y[i] = x[i] * rsqrt(mean(x[i]^2) + eps)           (unweighted variant, src[1]==nullptr)
 //
 // Per Oracle review: MiniMind-3 (and tests/test-backend-ops.cpp's test_rms_norm)
 // call ggml_rms_norm(ctx, a, eps) WITHOUT a weight tensor, so src[1]==nullptr is
@@ -21,6 +21,10 @@
 // The kernel source is triton_kernels/rms_norm.py; the AOT launcher
 // signatures are emitted by scripts/compile_kernels.py into
 // ggml/src/ggml-triton/kernels/generated/rms_norm_{unweighted,weighted}_fp{16,32}_sm80.{h,c}.
+//
+// Stage 2 retro-fix: launch grid is num_blocks (= ne[1]*ne[2]*ne[3]) via
+// grid_mode="exact"; the unweighted launcher also takes a dummy d_w (= 0)
+// because the kernel reserves the slot for both variants.
 
 #include "ggml-triton-provider-rmsnorm.h"
 #include "ggml-triton-provider.h"
@@ -52,11 +56,17 @@ static inline bool rms_norm_eps_matches_stage1(const struct ggml_tensor * node) 
 static inline bool rms_norm_row_fits_stage1(const struct ggml_tensor * node) {
     // Stage 1 constraint: BLOCK_SIZE (=1024) must be >= the row length ne00.
     // The kernel masks out-of-range loads (other=0.0) so sum-of-squares is
-    // correct for any N <= BLOCK_SIZE, but the literal `N` is a constexpr
-    // and the row is laid out for one program per row. Reject rows larger
-    // than 1024 to keep semantics correct; a follow-up adds a multi-block
-    // variant.
+    // correct for any N <= BLOCK_SIZE, but the row is laid out for one
+    // program per row. Reject rows larger than 1024 to keep semantics
+    // correct; a follow-up adds a multi-block variant.
     return node->src[0]->ne[0] <= 1024;
+}
+
+// Total row count = ne[1] * ne[2] * ne[3]; used as the C grid size via
+// grid_mode="exact" (one Triton program per row).
+static inline int32_t rms_norm_num_blocks(const struct ggml_tensor * node) {
+    const struct ggml_tensor * src0 = node->src[0];
+    return (int32_t)(src0->ne[1] * src0->ne[2] * src0->ne[3]);
 }
 
 
@@ -77,11 +87,12 @@ static bool triton_rms_norm_unweighted_fp16_execute(struct ggml_backend_triton_c
     if (node->src[0]->data == nullptr || node->data == nullptr) {
         return false;
     }
-    const CUdeviceptr d_x = (CUdeviceptr) node->src[0]->data;
-    const CUdeviceptr d_y = (CUdeviceptr) node->data;
-    const int32_t     N   = (int32_t) node->src[0]->ne[0];
+    const CUdeviceptr d_x        = (CUdeviceptr) node->src[0]->data;
+    const CUdeviceptr d_y        = (CUdeviceptr) node->data;
+    const int32_t     N          = (int32_t) node->src[0]->ne[0];
+    const int32_t     num_blocks = rms_norm_num_blocks(node);
     const int rc = triton_launch_rms_norm_unweighted_fp16_sm80(
-        ctx->cu_stream, d_x, d_y, N);
+        ctx->cu_stream, d_x, d_y, 0 /* d_w dummy: USE_WEIGHT=0 in kernel */, N, num_blocks);
     return rc == 0;
 }
 
@@ -103,12 +114,13 @@ static bool triton_rms_norm_weighted_fp16_execute(struct ggml_backend_triton_con
     if (node->src[0]->data == nullptr || node->src[1]->data == nullptr || node->data == nullptr) {
         return false;
     }
-    const CUdeviceptr d_x = (CUdeviceptr) node->src[0]->data;
-    const CUdeviceptr d_w = (CUdeviceptr) node->src[1]->data;
-    const CUdeviceptr d_y = (CUdeviceptr) node->data;
-    const int32_t     N   = (int32_t) node->src[0]->ne[0];
+    const CUdeviceptr d_x        = (CUdeviceptr) node->src[0]->data;
+    const CUdeviceptr d_w        = (CUdeviceptr) node->src[1]->data;
+    const CUdeviceptr d_y        = (CUdeviceptr) node->data;
+    const int32_t     N          = (int32_t) node->src[0]->ne[0];
+    const int32_t     num_blocks = rms_norm_num_blocks(node);
     const int rc = triton_launch_rms_norm_weighted_fp16_sm80(
-        ctx->cu_stream, d_x, d_w, d_y, N);
+        ctx->cu_stream, d_x, d_w, d_y, N, num_blocks);
     return rc == 0;
 }
 
@@ -130,11 +142,12 @@ static bool triton_rms_norm_unweighted_fp32_execute(struct ggml_backend_triton_c
     if (node->src[0]->data == nullptr || node->data == nullptr) {
         return false;
     }
-    const CUdeviceptr d_x = (CUdeviceptr) node->src[0]->data;
-    const CUdeviceptr d_y = (CUdeviceptr) node->data;
-    const int32_t     N   = (int32_t) node->src[0]->ne[0];
+    const CUdeviceptr d_x        = (CUdeviceptr) node->src[0]->data;
+    const CUdeviceptr d_y        = (CUdeviceptr) node->data;
+    const int32_t     N          = (int32_t) node->src[0]->ne[0];
+    const int32_t     num_blocks = rms_norm_num_blocks(node);
     const int rc = triton_launch_rms_norm_unweighted_fp32_sm80(
-        ctx->cu_stream, d_x, d_y, N);
+        ctx->cu_stream, d_x, d_y, 0 /* d_w dummy: USE_WEIGHT=0 in kernel */, N, num_blocks);
     return rc == 0;
 }
 
@@ -156,12 +169,13 @@ static bool triton_rms_norm_weighted_fp32_execute(struct ggml_backend_triton_con
     if (node->src[0]->data == nullptr || node->src[1]->data == nullptr || node->data == nullptr) {
         return false;
     }
-    const CUdeviceptr d_x = (CUdeviceptr) node->src[0]->data;
-    const CUdeviceptr d_w = (CUdeviceptr) node->src[1]->data;
-    const CUdeviceptr d_y = (CUdeviceptr) node->data;
-    const int32_t     N   = (int32_t) node->src[0]->ne[0];
+    const CUdeviceptr d_x        = (CUdeviceptr) node->src[0]->data;
+    const CUdeviceptr d_w        = (CUdeviceptr) node->src[1]->data;
+    const CUdeviceptr d_y        = (CUdeviceptr) node->data;
+    const int32_t     N          = (int32_t) node->src[0]->ne[0];
+    const int32_t     num_blocks = rms_norm_num_blocks(node);
     const int rc = triton_launch_rms_norm_weighted_fp32_sm80(
-        ctx->cu_stream, d_x, d_w, d_y, N);
+        ctx->cu_stream, d_x, d_w, d_y, N, num_blocks);
     return rc == 0;
 }
 

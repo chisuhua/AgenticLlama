@@ -34,14 +34,15 @@
 CUdeviceptr d_x,
 CUdeviceptr d_w,
 CUdeviceptr d_y,
-int32_t     N) {
+int32_t     N,
+int32_t     num_blocks) {
             if (load_module_once() != 0) {
                 return -1;
             }
 
-            void * args[] = { (void *) &d_x, (void *) &d_w, (void *) &d_y, (void *) &N };
+            void * args[] = { (void *) &d_x, (void *) &d_w, (void *) &d_y, (void *) &N, (void *) &num_blocks };
             const int block = kTritonBlockSize_rms_norm_weighted_fp32_sm80;
-            const int grid  = (int)((N + block - 1) / block);
+            const int grid  = (int)(num_blocks);
 
             CUresult r = cuLaunchKernel(g_function,
                                         grid, 1, 1,

@@ -10,7 +10,9 @@
             CUstream    stream,
 CUdeviceptr d_x,
 CUdeviceptr d_y,
-int32_t     N);
+CUdeviceptr d_w,
+int32_t     N,
+int32_t     num_blocks);
 
         #ifdef __cplusplus
         }

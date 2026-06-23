@@ -263,13 +263,13 @@
           "dtype": "fp16",
           "arch":  "sm80",
           "specialise": { "BLOCK_SIZE": 1024, "EPS": 1.0e-6, "USE_WEIGHT": 0 },
-          "signature": "*fp16,*fp16,i32,1024,1e-06,0"
+          "signature": "*fp16,*fp16,*fp16,i32,i32,1024,1e-06,0"
         },
         {
           "dtype": "fp32",
           "arch":  "sm80",
           "specialise": { "BLOCK_SIZE": 1024, "EPS": 1.0e-6, "USE_WEIGHT": 0 },
-          "signature": "*fp32,*fp32,i32,1024,1e-06,0"
+          "signature": "*fp32,*fp32,*fp32,i32,i32,1024,1e-06,0"
         }
       ]
     },
@@ -282,13 +282,13 @@
           "dtype": "fp16",
           "arch":  "sm80",
           "specialise": { "BLOCK_SIZE": 1024, "EPS": 1.0e-6, "USE_WEIGHT": 1 },
-          "signature": "*fp16,*fp16,*fp16,i32,1024,1e-06,1"
+          "signature": "*fp16,*fp16,*fp16,i32,i32,1024,1e-06,1"
         },
         {
           "dtype": "fp32",
           "arch":  "sm80",
           "specialise": { "BLOCK_SIZE": 1024, "EPS": 1.0e-6, "USE_WEIGHT": 1 },
-          "signature": "*fp32,*fp32,*fp32,i32,1024,1e-06,1"
+          "signature": "*fp32,*fp32,*fp32,i32,i32,1024,1e-06,1"
         }
       ]
     },
