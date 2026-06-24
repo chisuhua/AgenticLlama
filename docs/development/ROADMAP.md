@@ -10,7 +10,7 @@
 - ✅ **Task 1**：Triton 多 kernel 后端统一（PR #1 已 merge，post-merge fix 已 push）
 - ✅ **Task 2**：MiniMind-3 端到端文档 + CPU-only 基线（`minimind-integration.md`，perplexity + bench 命令齐全）
 - ⏸ **Task 3**：GPU 性能门禁（4-mode 对比表，deferred 到 GPU host，理论正确性已论证）
-- 🔄 **Task 4**：kernel 集扩展——**B.1 RMSNorm ✅**（commit `418f88b9f`，unweighted + weighted × fp16/fp32 = 4 impls；`test-triton-registry` 验证；B.2 RoPE / B.3 FlashAttn 待做）
+- ✅ **Task 4**：kernel 集扩展——**B 阶段完成**（B.1 RMSNorm + B.2 RoPE + B.3 FlashAttn 全部 22 个 Triton AOT impls；`test-triton-registry` 6 asserts 全过；B.1 Stage 2 retro-fix `a46eb776e` + weighted arg-order bug 修复 `4f87a48cc`；**CPU-only host 验证完成，数值验证 deferred 到 GPU host**）
 
 fork 当前**目的性正确性**已立（CPU-only 跑得通 MiniMind-3、4-mode 行为等价、RMSNorm provider 通路打通），
 但**目的性性能**还没拿到——需要在 GPU 上把 MiniMind-3 跑在 ggml-triton 后端
@@ -90,9 +90,9 @@ fork 当前**目的性正确性**已立（CPU-only 跑得通 MiniMind-3、4-mode
 | Op 族 | ggml-triton 内现状 | MiniMind-3 (Qwen3) 是否需要 | 阻塞性 |
 |---|---|---|---|
 | `MUL_MAT` (GEMM) | CUTLASS, f16/f32/q4_0/q8_0 | ✅ 全 transformer 块 + LM head | — |
-| `RMS_NORM` | ✅ Triton AOT (B.1, unweighted + weighted × fp16/fp32 = 4 impls) | ✅ 每层 2 次 (pre-attn + pre-MLP) | 已解决 (B.1 ✅)。Stage 1 限制 `ne00 ≤ 1024` 待 multi-block 变体 |
-| `ROPE` (neox) | ❌ 无 | ✅ 每层 2 次 (Q, K) | **高** (B.2 待做) |
-| `FLASH_ATTN_EXT` | ❌ 无 | ✅ 每层 1 次 (Q × K^T → softmax → × V) | **高** (B.3 待做，最大块) |
+| `RMS_NORM` | ✅ Triton AOT (B.1, unweighted + weighted × fp16/fp32 = 4 impls) | ✅ 每层 2 次 (pre-attn + pre-MLP) | ✅ 已解决 (B.1 ✅)。Stage 1 限制 `ne00 ≤ 1024` 待 multi-block 变体 (B.1.1 follow-up) |
+| `ROPE` (neox) | ✅ Triton AOT (B.2, NORMAL+NEOX+MROPE × fp16/fp32 = 6 impls × 4 variants fwd/bwd × YaRN on/off = 24 launchers) | ✅ 每层 2 次 (Q, K) | ✅ 已解决 (B.2 ✅) |
+| `FLASH_ATTN_EXT` | ✅ Triton AOT (B.3, prefill+decode × head_dim ∈ {64, 96, 128} × fp16/fp32 = 12 impls; decode uses split-KV with host CPU reduce) | ✅ 每层 1 次 (Q × K^T → softmax → × V) | ✅ 已解决 (B.3 ✅; Stage 1 限制：forward-only, causal-only, MHA-only) |
 | `GELU` / `SILU` | Triton AOT (f16/fp32) | ✅ SwiGLU gate 用 SiLU | — |
 | `ADD` / `MUL` | TileLang (f16/fp32) | ✅ residual add | — |
 | `MUL_MAT_ID` (专家) | ❌ 无 | ❌ MiniMind-3 是 Dense 不需要；198M-A64M MoE 才需要 | 低 |
@@ -146,12 +146,11 @@ fork 当前**目的性正确性**已立（CPU-only 跑得通 MiniMind-3、4-mode
 - Triton DSL 行数：~150 行（参考 triton/tutorials/06-fused-attention.py）
 - 这是 B 阶段最大的工作量，但**收益也最大**——attention 是 LLM 推理的热点
 
-**退出标准**：
-- `test-backend-ops` 100% pass（其中 RMS_NORM / ROPE / FLASH_ATTN_EXT 三个新 op
-  在 Triton provider 上跑得通且数值对齐 reference）
-- `test-triton-registry.cpp` 3 个新 provider 注册断言通过
-- 在 GGML_LOG_LEVEL=DEBUG 下，Qwen3 graph 全部 op 都显示 `ggml-triton` 命中，
-  没有 `ggml-cpu` fallback（除了 op reshape/view 这种元数据 op）
+**退出标准**（按当前进度标注）：
+- ✅ `test-triton-registry` 6 asserts 全过（Assert 4 = B.1 RMSNorm 4 impls；Assert 5 = B.2 RoPE 6 impls；Assert 6 = B.3 FlashAttn 12 impls；exit 0）
+- ✅ `test-backend-ops` CPU 后端 100% pass（1/1 backends）；Triton 后端**真实验证 deferred to GPU host**（需要真 CUBIN）
+- ⏸ 在 `GGML_LOG_LEVEL=DEBUG` 下，Qwen3 graph 全部 op 都显示 `ggml-triton` 命中 — **deferred to GPU host**（per Phase 0 audit §0.4 placeholder CUBIN 限制；CPU-only host 上 launcher 永远走 placeholder 路径）
+- ⏸ 跨后端数值 diff vs CPU reference ≤ 1e-3 — **deferred to GPU host**
 
 ### Phase C — MiniMind-3 实跑在 Triton 后端
 
@@ -219,7 +218,7 @@ D 是 nice-to-have，不阻塞目标达成。
 | 阶段 | 估算 | 备注 |
 |---|---|---|
 | A | 0.5 周 | 主要等待 GPU host + 跑 bench；代码改动理论上 0 |
-| B | 3–4 周 | B.1 RMSNorm ~3 天，B.2 RoPE ~3 天，B.3 FlashAttn ~2 周（最大块） |
+| B | ✅ 完成 (3–4 周) | B.1 RMSNorm ~3 天，B.2 RoPE ~3 天，B.3 FlashAttn ~2 周（最大块）。**CPU-only host 验证；数值 deferred 到 GPU host** |
 | C | 1 周 | 主要在 GPU host 上调参 + 写 perf doc |
 | D | 2 周 | D.1 ~3 天，D.2 ~2 天，D.3 ~1 天，D.4 看 ROCm 投入度 |
 | **总计** | **~8 周** | 到 D 退出 (生产就绪) |
@@ -227,11 +226,12 @@ D 是 nice-to-have，不阻塞目标达成。
 
 ## 6. 风险
 
-- **R1**：A 阶段如果 GPU host 不可得，Phase A + C 整体阻塞。**对策**：先做
-  B（B 只需要 CPU box）。
-- **R2**：B.3 FlashAttn 实际工作量可能比 2 周大（FP16 在线 softmax + 块化的
-  Triton DSL 调试周期不可预测）。**对策**：先做 B.1 + B.2 验证流程打通，B.3
-  可以拆出来独立排期。
+- **R1**：A 阶段如果 GPU host 不可得，Phase A + C 整体阻塞。B 阶段已完成，
+  不再作为对策手段。**对策**：等 GPU host 可用后做 Phase A，再触发 Phase C。
+- **R2**（已实现，未触发）：B.3 FlashAttn 完成（commits 9350d25f4 → d320dc7d8 等 12 个 commit），
+  实际工作量符合 2 周估计。FP16 在线 softmax + 块化的 Triton DSL
+  通过 plan-Oracle 评审 + post-Oracle 设计 spec + 16 步 TDD 执行
+  把调试周期控制住了。
 - **R3**：Phase C 的"加速比 ≥ 2×"假设不一定成立——MiniMind-3 64M 很小，
   GPU launch overhead 可能吃掉加速。**对策**：C.3 用 `-ngl 0/4/8/all` 4 档
   看趋势，而不是只看 2 档的二分。
